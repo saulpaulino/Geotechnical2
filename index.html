@@ -1,0 +1,1433 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GEOTECHNICAL Market Intel v3</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{height:100%;overflow:hidden}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#1e2a3a;border-radius:3px}
+body.light-mode ::-webkit-scrollbar-thumb{background:#b8c3d4}
+@keyframes pulse{0%,100%{opacity:.3;transform:scale(.8)}50%{opacity:1;transform:scale(1)}}
+@keyframes slideIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes scanPulse{0%,100%{box-shadow:0 0 8px rgba(166,61,64,.2)}50%{box-shadow:0 0 24px rgba(166,61,64,.5)}}
+@media(max-width:768px){.geo-sidebar{position:fixed!important;left:-220px;z-index:900;transition:left .3s;height:100vh!important}.geo-sidebar.open{left:0}.geo-overlay{display:block!important}.geo-hamburger{display:inline-flex!important}.geo-kpi4{grid-template-columns:repeat(2,1fr)!important}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useCallback,useRef} = React;
+
+// ===== STYLES =====
+const DARK_C={bg:"#0a0e17",card:"#111827",hover:"#1a2234",side:"#0d1220",brd:"#1e2a3a",brdL:"#2a3a4e",
+tx:"#e2e8f0",txM:"#8896ab",txD:"#5a6577",acc:"#A63D40",accG:"rgba(166,61,64,.15)",
+cr:"#ef4444",crBg:"rgba(239,68,68,.1)",hi:"#C25E5E",hiBg:"rgba(194,94,94,.1)",
+md:"#2C6E6A",mdBg:"rgba(44,110,106,.1)",ok:"#10b981",okBg:"rgba(16,185,129,.1)",dm:"#6b7280"};
+const LIGHT_C={bg:"#f0f2f5",card:"#ffffff",hover:"#e8ecf2",side:"#e4e8ef",brd:"#d0d7e2",brdL:"#b8c3d4",
+tx:"#1e2a3d",txM:"#4a5568",txD:"#8896ab",acc:"#A63D40",accG:"rgba(166,61,64,.1)",
+cr:"#dc2626",crBg:"rgba(220,38,38,.1)",hi:"#b91c1c",hiBg:"rgba(185,28,28,.08)",
+md:"#0d9488",mdBg:"rgba(13,148,136,.1)",ok:"#059669",okBg:"rgba(5,150,105,.1)",dm:"#9ca3af"};
+let C={...DARK_C};
+const F={h:"'JetBrains Mono',monospace",b:"'IBM Plex Sans',sans-serif",m:"'JetBrains Mono',monospace"};
+const fmt=v=>{const n=Number(v)||0;return n>=1e6?`$${(n/1e6).toFixed(1)}M`:`$${(n/1e3).toFixed(0)}K`;};
+const pC=p=>p==="critical"?C.cr:p==="high"?C.hi:p==="medium"?C.md:C.dm;
+const pB=p=>p==="critical"?C.crBg:p==="high"?C.hiBg:p==="medium"?C.mdBg:"rgba(107,114,128,.1)";
+const sMap={"pre-licitación":"Pre-Licitación","diseño-avanzado":"Diseño Avanzado","estudio-factibilidad":"Factibilidad","permiso-aprobado":"Permiso OK","negociación":"Negociación","planificación":"Planificación","licitación-activa":"Licitación Activa","detectado":"Detectado"};
+const sL=s=>sMap[s]||s;
+
+// ===== URL SAFETY =====
+function isSafeUrl(url){
+  if(!url)return false;
+  try{const u=new URL(url);return u.protocol==="https:"||u.protocol==="http:";}
+  catch(e){return false;}
+}
+
+// ===== NORMALIZE PROJECT (single source of truth) =====
+function normalizeProject(p){
+  const today=new Date().toISOString().split("T")[0];
+  return {
+    id:p.id||"PRJ-"+Date.now().toString(36),
+    title:p.titulo||p.title||"",
+    source:p.fuente||p.source||"Scanner AI",
+    type:p.tipo||p.type||"",
+    region:p.region||"",
+    province:p.provincia||p.province||"",
+    estimatedValue:p.valor_estimado||p.estimatedValue||0,
+    blastingProbability:p.prob_voladura||p.blastingProbability||50,
+    detectedDate:p.fecha_deteccion||p.detectedDate||today,
+    estimatedStart:p.inicio_estimado||p.estimatedStart||"",
+    status:p.status||"detectado",
+    description:p.descripcion||p.description||"",
+    signals:typeof p.señales==="string"?p.señales.split(";").map(s=>s.trim()).filter(Boolean):(p.signals||[]),
+    competitors:typeof p.competidores==="string"?p.competidores.split(";").map(s=>s.trim()).filter(Boolean):(p.competitors||[]),
+    aiInsight:p.ai_insight||p.aiInsight||"",
+    priority:p.prioridad||p.priority||"medium",
+    contactLead:p.contacto||p.contactLead||"",
+    urlLicitacion:p.url_licitacion||p.urlLicitacion||null,
+    urlFuente:p.url_fuente||p.urlFuente||null,
+    codigoProceso:p.codigo_proceso||p.codigoProceso||"",
+    notes:p.notes||[]
+  };
+}
+
+// ===== DEFAULT DATA (localStorage only, no Google Sheets) =====
+const DEFAULT_HISTORICAL=[
+  {month:"Oct",revenue:45000,projects:2,winRate:72},
+  {month:"Nov",revenue:62000,projects:3,winRate:78},
+  {month:"Dic",revenue:58000,projects:2,winRate:75},
+  {month:"Ene",revenue:74000,projects:4,winRate:82},
+  {month:"Feb",revenue:88000,projects:5,winRate:84},
+  {month:"Mar",revenue:95000,projects:4,winRate:86}
+];
+
+// ===== ERROR BOUNDARY =====
+class ErrorBoundary extends React.Component{
+  constructor(props){super(props);this.state={hasError:false,error:null};}
+  static getDerivedStateFromError(error){return{hasError:true,error};}
+  render(){
+    if(this.state.hasError){
+      return React.createElement("div",{style:{padding:40,textAlign:"center",color:"#e2e8f0",background:"#0a0e17",height:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}},
+        React.createElement("div",{style:{fontSize:48,marginBottom:16}},"⚠️"),
+        React.createElement("h2",{style:{fontSize:18,fontFamily:"'IBM Plex Sans',sans-serif",marginBottom:8}},"Algo salió mal"),
+        React.createElement("p",{style:{fontSize:13,color:"#8896ab",fontFamily:"'IBM Plex Sans',sans-serif",marginBottom:16,maxWidth:400}},this.state.error?.message||"Error desconocido"),
+        React.createElement("button",{onClick:()=>this.setState({hasError:false,error:null}),style:{background:"#A63D40",border:"none",borderRadius:8,padding:"10px 24px",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}},"Reintentar")
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// ===== KANBAN COLUMN FILTER (shared) =====
+function kanbanColProjects(projects,colId){
+  return projects.filter(p=>{
+    const s=p.kanbanStatus||p.status||"detectado";
+    if(colId==="contactado") return s==="contactado"||s==="pre-licitación"||s==="diseño-avanzado";
+    if(colId==="cotizado") return s==="cotizado"||s==="estudio-factibilidad"||s==="licitación-activa";
+    if(colId==="negociacion") return s==="negociacion"||s==="negociación"||s==="planificación"||s==="permiso-aprobado";
+    return s===colId;
+  });
+}
+
+// ===== DGCP SCANNER — Claude web_search =====
+const PROXY_URL="https://yellow-paper-dc25.saulpaulino8.workers.dev";
+
+async function claudeCall(claudeKey, prompt, useWebSearch=true){
+  const body={apiKey:claudeKey,model:"claude-sonnet-4-20250514",max_tokens:4000,messages:[{role:"user",content:prompt}]};
+  if(useWebSearch)body.tools=[{type:"web_search_20250305",name:"web_search"}];
+  const res=await fetch(PROXY_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(!res.ok){const e=await res.text();throw new Error(`API ${res.status}: ${e}`);}
+  const data=await res.json();
+  let text="";
+  for(const b of data.content){if(b.type==="text")text+=b.text;}
+  return text;
+}
+
+function parseJSONArray(text){
+  const cleaned=text.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();
+  const m=cleaned.match(/\[[\s\S]*\]/);
+  if(m)try{return JSON.parse(m[0]);}catch(e){}
+  return [];
+}
+
+async function scanDGCP(claudeKey, existingTitles){
+  const today=new Date().toISOString().split("T")[0];
+  const now=new Date().toISOString();
+  const excluir=existingTitles.slice(0,8).join("; ")||"ninguno";
+  const d=new Date();
+  const mesActual=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+  const mesNombre=d.toLocaleString("es-DO",{month:"long",year:"numeric"});
+
+  const prompt=`Busca proyectos de construcción e infraestructura en República Dominicana que necesiten explosivos o voladura. Busca en noticias recientes y en comprasdominicana.gob.do.
+
+Tipos de proyectos: carreteras, autopistas, presas, canteras, minería, túneles, puentes, movimiento de tierra, puertos.
+
+Solo proyectos de ${d.getFullYear()}. No incluir: ${excluir}.
+
+Responde SOLO con array JSON sin markdown ni backticks:
+[{"id":"DO-${String(Date.now()).slice(-4)}","titulo":"nombre del proyecto","fuente":"fuente donde lo encontraste","tipo":"Carreteras|Hidroeléctrica|Minería|Industrial|Portuario|Otro","region":"Norte|Sur|Este|Oeste|DN","provincia":"provincia","valor_estimado":0,"prob_voladura":85,"fecha_deteccion":"${today}","status":"detectado","descripcion":"qué es el proyecto","señales":"por qué necesita explosivos","ai_insight":"estrategia para venderles explosivos","prioridad":"high|medium|low","contacto":"entidad responsable","url_licitacion":"link directo a la licitación en comprasdominicana.gob.do si existe, o null","url_fuente":"link de la noticia si aplica","codigo_proceso":"código DGCP si aplica","ultima_actualizacion":"${now}"}]
+
+Si no encuentras nada responde: []`;
+
+  try{
+    const text=await claudeCall(claudeKey,prompt,true);
+    const projects=parseJSONArray(text);
+    return{success:true,projects,raw:text};
+  }catch(err){
+    return{success:false,error:err.message,projects:[]};
+  }
+}
+
+// ===== ADJUDICADAS — Claude web_search =====
+async function buscarAdjudicadas(claudeKey){
+  const today=new Date().toISOString().split("T")[0];
+  const d=new Date();
+  const mesNombre=d.toLocaleString("es-DO",{month:"long",year:"numeric"});
+  const mesAnterior=new Date(d.getFullYear(),d.getMonth()-1,1).toLocaleString("es-DO",{month:"long",year:"numeric"});
+  const prompt=`Busca contratos de obras de infraestructura adjudicados recientemente (${mesAnterior} a ${mesNombre}) a empresas constructoras en República Dominicana. Estos contratos son oportunidades B2B para GEOTECHNICAL (empresa de explosivos y voladuras).
+
+FUENTES A BUSCAR:
+1. comprasdominicana.gob.do — sección "adjudicados" o "resultados" de licitaciones de obras
+2. MOPC (Ministerio de Obras Públicas) — contratos adjudicados recientes
+3. Noticias de ${mesNombre} y ${mesAnterior}: "adjudicación contrato carretera dominicana", "constructora gana licitación RD", "MOPC adjudica"
+4. Cámara Dominicana de la Construcción — noticias de contratos
+
+TIPOS DE OBRAS QUE INTERESAN: carreteras, autopistas, presas, represas, canteras, minería, túneles, puentes en montaña, movimiento masivo de tierra, acueductos en roca, muelles/puertos.
+
+Para cada contrato encontrado, extrae el NOMBRE DE LA EMPRESA QUE GANÓ — esa empresa necesita comprar explosivos a GEOTECHNICAL.
+
+Responde SOLO con array JSON puro sin markdown:
+[{"empresa":"nombre empresa constructora ganadora","proyecto":"nombre del proyecto","institucion":"entidad que adjudicó","valor_dop":0,"fecha_adjudicacion":"fecha si disponible","tipo":"Carreteras|Hidroeléctrica|Minería|Portuario|Otro","provincia":"provincia","descripcion":"descripción del proyecto","por_que_necesita_explosivos":"razón técnica clara: voladura de roca para abrir camino, etc.","url":"URL directa al contrato en comprasdominicana.gob.do o a la noticia","codigo_contrato":"código si disponible","prioridad_contacto":"alta|media|baja","contacto_empresa":"teléfono o web de la constructora si lo encuentras"}]
+
+IMPORTANTE: Busca amplio. Incluye tanto los del portal oficial como los que aparezcan en noticias. Si una constructora grande como Estrella, ODEBRETCH, Haché, CORAAMOCA, etc. ganó un contrato de carretera, ESO es exactamente lo que buscamos.
+Si no encuentras nada responde: []`;
+
+  const text=await claudeCall(claudeKey,prompt,true);
+  return parseJSONArray(text);
+}
+
+// ===== COMPONENTS =====
+function Gauge({value,size=48}){
+  const r=(size-6)/2,c=Math.PI*2*r,off=c-(value/100)*c;
+  const col=value>=80?C.ok:value>=60?C.hi:C.md;
+  return React.createElement("div",{style:{position:"relative",width:size,height:size}},
+    React.createElement("svg",{width:size,height:size,style:{transform:"rotate(-90deg)"}},
+      React.createElement("circle",{cx:size/2,cy:size/2,r,fill:"none",stroke:C.brd,strokeWidth:"3"}),
+      React.createElement("circle",{cx:size/2,cy:size/2,r,fill:"none",stroke:col,strokeWidth:"3",strokeDasharray:c,strokeDashoffset:off,strokeLinecap:"round",style:{transition:"stroke-dashoffset .8s"}})
+    ),
+    React.createElement("span",{style:{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,fontFamily:F.m,color:col}},value+"%")
+  );
+}
+
+function Bars({data,dk,color,h=80}){
+  const mx=Math.max(...data.map(d=>d[dk]),1);
+  return React.createElement("div",{style:{display:"flex",alignItems:"flex-end",gap:3,height:h,width:"100%"}},
+    data.map((d,i)=>React.createElement("div",{key:i,style:{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}},
+      React.createElement("div",{style:{width:"100%",maxWidth:28,height:`${(d[dk]/mx)*100}%`,minHeight:3,background:`linear-gradient(180deg,${color},${color}88)`,borderRadius:"3px 3px 0 0",transition:"height .5s"}}),
+      React.createElement("span",{style:{fontSize:9,color:C.txD,fontFamily:F.m}},d.month)
+    ))
+  );
+}
+
+function Modal({project:p,onClose,onAddNote,onUpdateProject}){
+  if(!p)return null;
+  const[noteText,setNoteText]=useState("");
+  const[editContact,setEditContact]=useState(false);
+  const[ci,setCi]=useState({nombre:p.contactLead||"",telefono:p.telefono||"",whatsapp:p.whatsapp||"",email:p.email||"",empresa:p.empresa||""});
+  const[reminderDate,setReminderDate]=useState(p.reminder||"");
+  const[reminderNote,setReminderNote]=useState(p.reminderNote||"");
+
+  const handleAddNote=()=>{if(noteText.trim()&&onAddNote){onAddNote(p.id||p.title,noteText);setNoteText("");}};
+  const saveContact=()=>{if(onUpdateProject){onUpdateProject(p.id||p.title,{contactLead:ci.nombre,telefono:ci.telefono,whatsapp:ci.whatsapp,email:ci.email,empresa:ci.empresa});setEditContact(false);}};
+  const saveReminder=()=>{if(onUpdateProject&&reminderDate){onUpdateProject(p.id||p.title,{reminder:reminderDate,reminderNote,reminderShown:false});alert("Recordatorio guardado para "+reminderDate);}};
+  const waMsg=encodeURIComponent(`Buenos días, somos GEOTECHNICAL — empresa de explosivos y voladuras en RD. Vimos el proyecto "${p.title}" y nos gustaría ofrecerles nuestros servicios de voladura y suministro de explosivos. ¿Cuándo podemos conversar?`);
+  const waLink=p.whatsapp?`https://wa.me/${p.whatsapp.replace(/[^0-9]/g,"")}?text=${waMsg}`:`https://wa.me/?text=${waMsg}`;
+
+  const generatePDF=()=>{
+    const{jsPDF}=window.jspdf;
+    const doc=new jsPDF();
+    const w=doc.internal.pageSize.getWidth();
+    const margin=20;
+    const cw=w-margin*2;
+    let y=20;
+
+    // Header bar
+    doc.setFillColor(166,61,64);
+    doc.rect(0,0,w,35,"F");
+    doc.setFont("helvetica","bold");
+    doc.setFontSize(22);
+    doc.setTextColor(255,255,255);
+    doc.text("GEOTECHNICAL",margin,24);
+    doc.setFontSize(10);
+    doc.text("PROPUESTA TÉCNICA DE SERVICIOS",w-margin,16,{align:"right"});
+    doc.setFontSize(8);
+    doc.text("EXPLOSIVOS COMERCIALES | REPÚBLICA DOMINICANA",w-margin,22,{align:"right"});
+    doc.text("Fecha: "+new Date().toLocaleDateString("es-DO",{year:"numeric",month:"long",day:"numeric"}),w-margin,28,{align:"right"});
+    y=45;
+
+    // Project title
+    doc.setFillColor(17,24,39);
+    doc.rect(margin,y,cw,18,"F");
+    doc.setFont("helvetica","bold");
+    doc.setFontSize(14);
+    doc.setTextColor(166,61,64);
+    doc.text(p.title||"Proyecto",margin+6,y+12);
+    y+=26;
+
+    // Key metrics
+    doc.setFillColor(240,240,240);
+    doc.rect(margin,y,cw,20,"F");
+    doc.setFontSize(9);
+    doc.setTextColor(80,80,80);
+    const metrics=[
+      {l:"VALOR ESTIMADO",v:fmt(p.estimatedValue||0)},
+      {l:"PROB. VOLADURA",v:(p.blastingProbability||0)+"%"},
+      {l:"INICIO EST.",v:p.estimatedStart||"TBD"},
+      {l:"REGIÓN",v:p.province||"RD"}
+    ];
+    const colW=cw/4;
+    metrics.forEach((m,i)=>{
+      doc.setFont("helvetica","normal");
+      doc.setFontSize(7);
+      doc.setTextColor(120,120,120);
+      doc.text(m.l,margin+6+i*colW,y+7);
+      doc.setFont("helvetica","bold");
+      doc.setFontSize(11);
+      doc.setTextColor(30,30,30);
+      doc.text(m.v,margin+6+i*colW,y+15);
+    });
+    y+=28;
+
+    // Section helper
+    const section=(title)=>{
+      if(y>260){doc.addPage();y=20;}
+      doc.setFont("helvetica","bold");
+      doc.setFontSize(11);
+      doc.setTextColor(166,61,64);
+      doc.text(title,margin,y);
+      doc.setDrawColor(166,61,64);
+      doc.line(margin,y+2,margin+cw,y+2);
+      y+=10;
+    };
+
+    const body=(text)=>{
+      if(!text)return;
+      doc.setFont("helvetica","normal");
+      doc.setFontSize(9);
+      doc.setTextColor(60,60,60);
+      const lines=doc.splitTextToSize(text,cw);
+      lines.forEach(line=>{
+        if(y>275){doc.addPage();y=20;}
+        doc.text(line,margin,y);
+        y+=5;
+      });
+      y+=4;
+    };
+
+    // Description
+    section("DESCRIPCIÓN DEL PROYECTO");
+    body(p.description||"Proyecto de infraestructura en República Dominicana con potencial requerimiento de servicios de voladura y explosivos comerciales.");
+
+    // Type and details
+    section("DATOS DEL PROYECTO");
+    body("Tipo: "+(p.type||"Infraestructura"));
+    body("Fuente: "+(p.source||"Detección AI"));
+    body("Fecha de detección: "+(p.detectedDate||new Date().toISOString().split("T")[0]));
+    body("Status: "+(p.status||"Detectado"));
+    body("ID: "+(p.id||"N/A"));
+
+    // AI Analysis
+    section("ANÁLISIS DE INTELIGENCIA ARTIFICIAL");
+    body(p.aiInsight||"Proyecto con potencial de requerir servicios de voladura. Se recomienda contactar al responsable para evaluar necesidades específicas.");
+
+    // Signals
+    if(p.signals&&p.signals.length>0){
+      section("SEÑALES DETECTADAS");
+      p.signals.forEach(s=>{
+        body("• "+s);
+      });
+    }
+
+    // Competition
+    if(p.competitors&&p.competitors.length>0){
+      section("COMPETENCIA IDENTIFICADA");
+      p.competitors.forEach(c=>{
+        body("• "+c);
+      });
+    }
+
+    // Our proposal
+    section("PROPUESTA DE SERVICIOS");
+    body("Nuestra empresa ofrece los siguientes servicios para este proyecto:");
+    body("• Suministro de explosivos comerciales certificados (ANFO, emulsiones, dinamita)");
+    body("• Diseño de planes de voladura adaptados al terreno y condiciones del proyecto");
+    body("• Personal técnico especializado y certificado en voladura controlada");
+    body("• Servicio de perforación y voladura integral (drill & blast)");
+    body("• Monitoreo de vibraciones y control de impacto ambiental");
+    body("• Transporte especializado de materiales explosivos con todos los permisos");
+    body("• Soporte técnico 24/7 durante la ejecución del proyecto");
+
+    // Contact section
+    section("CONTACTO DEL PROYECTO");
+    body("Contacto clave: "+(p.contactLead||"Por identificar"));
+    if(isSafeUrl(p.urlFuente||p.url_fuente))body("Fuente: "+(p.urlFuente||p.url_fuente));
+
+    // Footer on each page
+    const pages=doc.internal.getNumberOfPages();
+    for(let i=1;i<=pages;i++){
+      doc.setPage(i);
+      doc.setFillColor(17,24,39);
+      doc.rect(0,285,w,12,"F");
+      doc.setFont("helvetica","normal");
+      doc.setFontSize(7);
+      doc.setTextColor(150,150,150);
+      doc.text("GEOTECHNICAL Market Intel | Documento confidencial | Generado automáticamente",margin,291);
+      doc.text("Página "+i+" de "+pages,w-margin,291,{align:"right"});
+    }
+
+    // Save
+    const fileName="Propuesta_"+(p.title||"Proyecto").replace(/[^a-zA-Z0-9áéíóúñÁÉÍÓÚÑ ]/g,"").replace(/ /g,"_").slice(0,40)+".pdf";
+    doc.save(fileName);
+  };
+
+  return React.createElement("div",{onClick:onClose,style:{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:20}},
+    React.createElement("div",{onClick:e=>e.stopPropagation(),style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:16,maxWidth:680,width:"100%",maxHeight:"85vh",overflow:"auto"}},
+      React.createElement("div",{style:{padding:"24px 28px",borderBottom:`1px solid ${C.brd}`,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
+        React.createElement("div",null,
+          React.createElement("div",{style:{display:"flex",gap:10,alignItems:"center",marginBottom:8}},
+            React.createElement("span",{style:{fontSize:10,fontFamily:F.m,color:pC(p.priority),background:pB(p.priority),padding:"3px 8px",borderRadius:4,textTransform:"uppercase",fontWeight:700,letterSpacing:1}},p.priority),
+            React.createElement("span",{style:{fontSize:11,color:C.txM,fontFamily:F.m}},p.id)
+          ),
+          React.createElement("h2",{style:{fontSize:18,fontWeight:700,color:C.tx,fontFamily:F.h,margin:0,lineHeight:1.3}},p.title)
+        ),
+        React.createElement("div",{style:{display:"flex",gap:8,alignItems:"center"}},
+          React.createElement("button",{onClick:generatePDF,style:{background:C.accG,border:`1px solid ${C.acc}44`,borderRadius:8,padding:"8px 14px",fontSize:11,fontWeight:700,color:C.acc,fontFamily:F.m,cursor:"pointer",display:"flex",alignItems:"center",gap:6}},"📄 Generar Propuesta PDF"),
+          React.createElement("button",{onClick:onClose,style:{background:"none",border:"none",color:C.txM,cursor:"pointer",padding:4,fontSize:20}},"✕")
+        )
+      ),
+      React.createElement("div",{style:{padding:"24px 28px"}},
+        React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:24}},
+          [{l:"Valor",v:fmt(p.estimatedValue)},{l:"Voladura",v:p.blastingProbability+"%"},{l:"Inicio",v:p.estimatedStart||"TBD"},{l:"Región",v:p.province}].map((m,i)=>
+            React.createElement("div",{key:i,style:{background:C.bg,borderRadius:8,padding:"12px 14px",textAlign:"center"}},
+              React.createElement("div",{style:{fontSize:9,color:C.txD,textTransform:"uppercase",letterSpacing:1,fontFamily:F.m,marginBottom:4}},m.l),
+              React.createElement("div",{style:{fontSize:16,fontWeight:700,color:C.acc,fontFamily:F.m}},m.v)
+            ))
+        ),
+        // Date and Source
+        React.createElement("div",{style:{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap",alignItems:"center"}},
+          p.detectedDate&&React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:C.bg,borderRadius:6,border:`1px solid ${C.brd}`}},
+            React.createElement("span",{style:{fontSize:11,color:C.md,fontFamily:F.m}},"📅 Detectado: "+p.detectedDate)
+          ),
+          isSafeUrl(p.urlLicitacion||p.url_licitacion)&&React.createElement("a",{href:p.urlLicitacion||p.url_licitacion,target:"_blank",rel:"noopener noreferrer",style:{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:C.accG,borderRadius:6,border:`1px solid ${C.acc}33`,textDecoration:"none"}},
+              React.createElement("span",{style:{fontSize:11,color:C.acc,fontFamily:F.m}},"📋 Ver licitación oficial")
+            ),
+          isSafeUrl(p.urlFuente||p.url_fuente)&&React.createElement("a",{href:p.urlFuente||p.url_fuente,target:"_blank",rel:"noopener noreferrer",style:{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:C.bg,borderRadius:6,border:`1px solid ${C.brd}`,textDecoration:"none"}},
+              React.createElement("span",{style:{fontSize:11,color:C.txM,fontFamily:F.m}},"🔗 Ver noticia")
+            ),
+          !isSafeUrl(p.urlLicitacion||p.url_licitacion)&&!isSafeUrl(p.urlFuente||p.url_fuente)&&p.source&&React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:C.bg,borderRadius:6,border:`1px solid ${C.brd}`}},
+              React.createElement("span",{style:{fontSize:11,color:C.txM,fontFamily:F.m}},"📰 "+p.source)
+            )
+        ),
+        React.createElement("div",{style:{background:`linear-gradient(135deg,${C.accG},transparent)`,border:`1px solid ${C.acc}33`,borderRadius:10,padding:16,marginBottom:20}},
+          React.createElement("div",{style:{fontSize:11,fontWeight:700,color:C.acc,fontFamily:F.m,marginBottom:8,textTransform:"uppercase",letterSpacing:1}},"⚡ ANÁLISIS AI"),
+          React.createElement("p",{style:{fontSize:13,color:C.tx,lineHeight:1.6,fontFamily:F.b,margin:0}},p.aiInsight)
+        ),
+        React.createElement("div",{style:{marginBottom:20}},
+          React.createElement("div",{style:{fontSize:11,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:8}},"DESCRIPCIÓN"),
+          React.createElement("p",{style:{fontSize:13,color:C.txM,lineHeight:1.6,fontFamily:F.b,margin:0}},p.description)
+        ),
+        p.signals&&p.signals.length>0&&React.createElement("div",{style:{marginBottom:20}},
+          React.createElement("div",{style:{fontSize:11,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:10}},"SEÑALES"),
+          p.signals.map((s,i)=>React.createElement("div",{key:i,style:{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:C.bg,borderRadius:6,marginBottom:4}},
+            React.createElement("div",{style:{width:6,height:6,borderRadius:"50%",background:C.ok,flexShrink:0}}),
+            React.createElement("span",{style:{fontSize:12,color:C.tx,fontFamily:F.b}},s)
+          ))
+        ),
+        // WHATSAPP BUTTON
+        React.createElement("a",{href:waLink,target:"_blank",rel:"noopener noreferrer",style:{display:"flex",alignItems:"center",justifyContent:"center",gap:10,padding:"12px",background:"#25D366",borderRadius:10,textDecoration:"none",marginBottom:20}},
+          React.createElement("span",{style:{fontSize:18}},"📱"),
+          React.createElement("span",{style:{fontSize:13,fontWeight:700,color:"#fff",fontFamily:F.m}},"Contactar por WhatsApp")
+        ),
+
+        // CONTACT CARD
+        React.createElement("div",{style:{background:C.bg,border:`1px solid ${C.brd}`,borderRadius:10,padding:16,marginBottom:20}},
+          React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}},
+            React.createElement("div",{style:{fontSize:11,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1}},"DATOS DE CONTACTO"),
+            React.createElement("button",{onClick:()=>{if(editContact)saveContact();else setEditContact(true);},style:{background:"none",border:`1px solid ${C.brd}`,borderRadius:6,padding:"4px 10px",fontSize:10,color:editContact?C.ok:C.acc,fontFamily:F.m,cursor:"pointer"}},editContact?"✓ Guardar":"Editar")
+          ),
+          editContact?
+            React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}},
+              React.createElement("input",{value:ci.nombre,onChange:e=>setCi(c=>({...c,nombre:e.target.value})),placeholder:"Nombre contacto",style:{gridColumn:"1/-1",background:C.card,border:`1px solid ${C.brd}`,borderRadius:6,padding:"8px 10px",fontSize:12,color:C.tx,fontFamily:F.b,outline:"none"}}),
+              React.createElement("input",{value:ci.empresa,onChange:e=>setCi(c=>({...c,empresa:e.target.value})),placeholder:"Empresa",style:{gridColumn:"1/-1",background:C.card,border:`1px solid ${C.brd}`,borderRadius:6,padding:"8px 10px",fontSize:12,color:C.tx,fontFamily:F.b,outline:"none"}}),
+              React.createElement("input",{value:ci.telefono,onChange:e=>setCi(c=>({...c,telefono:e.target.value})),placeholder:"Teléfono",style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:6,padding:"8px 10px",fontSize:12,color:C.tx,fontFamily:F.b,outline:"none"}}),
+              React.createElement("input",{value:ci.whatsapp,onChange:e=>setCi(c=>({...c,whatsapp:e.target.value})),placeholder:"WhatsApp (ej: 18091234567)",style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:6,padding:"8px 10px",fontSize:12,color:C.tx,fontFamily:F.b,outline:"none"}}),
+              React.createElement("input",{value:ci.email,onChange:e=>setCi(c=>({...c,email:e.target.value})),placeholder:"Email",style:{gridColumn:"1/-1",background:C.card,border:`1px solid ${C.brd}`,borderRadius:6,padding:"8px 10px",fontSize:12,color:C.tx,fontFamily:F.b,outline:"none"}})
+            ):
+            React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},
+              [{l:"Nombre",v:p.contactLead},{l:"Empresa",v:p.empresa},{l:"Teléfono",v:p.telefono},{l:"WhatsApp",v:p.whatsapp},{l:"Email",v:p.email}].map((f,i)=>
+                React.createElement("div",{key:i,style:{padding:"6px 0",gridColumn:i<2?"auto":"auto"}},
+                  React.createElement("div",{style:{fontSize:9,color:C.txD,fontFamily:F.m,textTransform:"uppercase"}},f.l),
+                  React.createElement("div",{style:{fontSize:12,color:f.v?C.tx:C.txD,fontFamily:F.b,marginTop:2}},f.v||"—")
+                )
+              )
+            )
+        ),
+
+        // REMINDER
+        React.createElement("div",{style:{background:C.bg,border:`1px solid ${C.brd}`,borderRadius:10,padding:16,marginBottom:20}},
+          React.createElement("div",{style:{fontSize:11,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:10}},"⏰ RECORDATORIO"),
+          React.createElement("div",{style:{display:"flex",gap:8}},
+            React.createElement("input",{type:"date",value:reminderDate,onChange:e=>setReminderDate(e.target.value),style:{flex:1,background:C.card,border:`1px solid ${C.brd}`,borderRadius:6,padding:"8px 10px",fontSize:12,color:C.tx,fontFamily:F.m,outline:"none"}}),
+            React.createElement("input",{value:reminderNote,onChange:e=>setReminderNote(e.target.value),placeholder:"Nota (ej: llamar de vuelta)",style:{flex:2,background:C.card,border:`1px solid ${C.brd}`,borderRadius:6,padding:"8px 10px",fontSize:12,color:C.tx,fontFamily:F.b,outline:"none"}}),
+            React.createElement("button",{onClick:saveReminder,style:{background:C.acc,border:"none",borderRadius:6,padding:"8px 14px",fontSize:11,fontWeight:700,color:C.bg,fontFamily:F.m,cursor:"pointer"}},"Guardar")
+          ),
+          p.reminder&&React.createElement("div",{style:{fontSize:11,color:C.ok,fontFamily:F.m,marginTop:8}},"📅 Recordatorio activo: "+p.reminder+(p.reminderNote?" — "+p.reminderNote:""))
+        ),
+
+        // NOTES
+        React.createElement("div",{style:{background:C.bg,border:`1px solid ${C.brd}`,borderRadius:10,padding:16,marginBottom:20}},
+          React.createElement("div",{style:{fontSize:11,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:10}},"📝 NOTAS DE SEGUIMIENTO"),
+          React.createElement("div",{style:{display:"flex",gap:8,marginBottom:12}},
+            React.createElement("input",{value:noteText,onChange:e=>setNoteText(e.target.value),onKeyDown:e=>{if(e.key==="Enter")handleAddNote();},placeholder:"Ej: Hablé con fulano, me dijo que arrancan en mayo...",style:{flex:1,background:C.card,border:`1px solid ${C.brd}`,borderRadius:6,padding:"8px 10px",fontSize:12,color:C.tx,fontFamily:F.b,outline:"none"}}),
+            React.createElement("button",{onClick:handleAddNote,style:{background:C.acc,border:"none",borderRadius:6,padding:"8px 14px",fontSize:11,fontWeight:700,color:C.bg,fontFamily:F.m,cursor:"pointer"}},"Agregar")
+          ),
+          (p.notes||[]).length===0?
+            React.createElement("div",{style:{fontSize:12,color:C.txD,fontFamily:F.b,textAlign:"center",padding:12}},"Sin notas aún. Agrega la primera nota de seguimiento."):
+            (p.notes||[]).map(n=>React.createElement("div",{key:n.id,style:{padding:"10px 12px",background:C.card,borderRadius:6,marginBottom:6,borderLeft:`3px solid ${C.acc}`}},
+              React.createElement("div",{style:{fontSize:12,color:C.tx,fontFamily:F.b,lineHeight:1.5}},n.text),
+              React.createElement("div",{style:{fontSize:10,color:C.txD,fontFamily:F.m,marginTop:4}},n.date)
+            ))
+        ),
+
+        // COMPETITION
+        (p.competitors||[]).length>0&&React.createElement("div",{style:{marginBottom:20}},
+          React.createElement("div",{style:{fontSize:11,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:8}},"COMPETENCIA"),
+          (p.competitors||[]).map((c,i)=>React.createElement("div",{key:i,style:{fontSize:12,color:C.txM,fontFamily:F.b,padding:"4px 0"}},"→ "+c))
+        )
+      )
+    )
+  );
+}
+
+// ===== SCANNER COMPONENT =====
+function Scanner({claudeKey, projects, onNewProjects}){
+  const[scanning,setScanning]=useState(false);
+  const[log,setLog]=useState([]);
+  const[found,setFound]=useState([]);
+  const[autoEnabled,setAutoEnabled]=useState(()=>{try{return localStorage.getItem('geoAutoScan')==='true'}catch(e){return false}});
+  const intervalRef=useRef(null);
+  
+  const addLog=(msg,type="info")=>setLog(prev=>[{msg,type,time:new Date().toLocaleTimeString("es-DO",{hour:"2-digit",minute:"2-digit",second:"2-digit"})},...prev].slice(0,50));
+
+  const runScan=useCallback(async()=>{
+    if(scanning||!claudeKey)return;
+    setScanning(true);
+    addLog("Conectando con Portal DGCP...","scan");
+    addLog("Descargando licitaciones recientes del Estado dominicano...","search");
+
+    const existingTitles=projects.map(p=>p.title||p.titulo||"");
+    const result=await scanDGCP(claudeKey,existingTitles);
+    
+    if(result.success){
+      addLog("✅ Búsqueda completada en portal DGCP y noticias","search");
+      if(result.projects.length>0){
+        addLog(`✅ ${result.projects.length} licitación(es) con potencial de voladura`,"success");
+        const newProjects=result.projects.map(normalizeProject);
+        setFound(prev=>[...newProjects,...prev]);
+        onNewProjects(newProjects);
+        newProjects.forEach(p=>addLog(`→ [${p.codigoProceso||"DGCP"}] ${p.titulo} | Voladura: ${p.prob_voladura||p.blastingProbability}%`,"project"));
+      }else{
+        addLog("No se encontraron licitaciones nuevas relevantes","info");
+        if(result.raw)addLog("Claude respondió: "+result.raw.slice(0,200),"info");
+      }
+    }else{
+      addLog(`❌ Error: ${result.error}`,"error");
+      if(result.raw)addLog("Respuesta: "+result.raw.slice(0,150),"info");
+    }
+
+    addLog("Escaneo completado","scan");
+    setScanning(false);
+  },[claudeKey,projects,scanning,onNewProjects]);
+
+  // Persist autoEnabled
+  useEffect(()=>{try{localStorage.setItem('geoAutoScan',autoEnabled)}catch(e){}},[autoEnabled]);
+
+  // Auto scan
+  useEffect(()=>{
+    if(autoEnabled&&claudeKey){
+      addLog("⏰ Auto-escaneo activado: cada 4 horas","auto");
+      intervalRef.current=setInterval(runScan,4*60*60*1000);
+      return()=>clearInterval(intervalRef.current);
+    }else{
+      if(intervalRef.current)clearInterval(intervalRef.current);
+    }
+  },[autoEnabled,claudeKey]);
+
+  const logColors={info:C.txM,scan:C.acc,search:C.md,success:C.ok,error:C.cr,project:C.hi,auto:C.md};
+
+  return React.createElement("div",{style:{animation:"slideIn .3s ease",height:"100%",display:"flex",flexDirection:"column"}},
+    // Header
+    React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}},
+      React.createElement("div",null,
+        React.createElement("h2",{style:{fontSize:14,fontWeight:700,fontFamily:F.h,color:C.tx,marginBottom:4}},"Escáner Portal DGCP"),
+        React.createElement("p",{style:{fontSize:12,color:C.txM,fontFamily:F.b}},
+          claudeKey?"Jala licitaciones reales del Estado dominicano y Claude filtra las que necesitan explosivos":"⚠ Configura tu API Key de Claude en el tab Conexión"
+        )
+      ),
+      React.createElement("div",{style:{display:"flex",gap:10,alignItems:"center"}},
+        // Auto toggle
+        React.createElement("div",{onClick:()=>claudeKey&&setAutoEnabled(!autoEnabled),style:{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",background:autoEnabled?C.okBg:C.bg,border:`1px solid ${autoEnabled?C.ok+"44":C.brd}`,borderRadius:8,cursor:claudeKey?"pointer":"not-allowed",opacity:claudeKey?1:.4}},
+          React.createElement("div",{style:{width:36,height:20,borderRadius:10,background:autoEnabled?C.ok:C.brd,display:"flex",alignItems:"center",padding:2,justifyContent:autoEnabled?"flex-end":"flex-start",transition:"all .2s"}},
+            React.createElement("div",{style:{width:16,height:16,borderRadius:"50%",background:"#fff",transition:"all .2s"}})
+          ),
+          React.createElement("span",{style:{fontSize:11,fontFamily:F.m,color:autoEnabled?C.ok:C.txM}},"Auto 4h")
+        ),
+        // Scan button
+        React.createElement("button",{onClick:runScan,disabled:scanning||!claudeKey,style:{background:scanning?"transparent":C.acc,border:scanning?`2px solid ${C.acc}`:"2px solid transparent",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,color:scanning?C.acc:C.bg,fontFamily:F.m,cursor:scanning||!claudeKey?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:8,animation:scanning?"scanPulse 2s infinite":"none",opacity:claudeKey?1:.4}},
+          scanning&&React.createElement("span",{style:{display:"inline-flex",animation:"spin 1s linear infinite"}},"⟳"),
+          scanning?"ESCANEANDO...":"⚡ ESCANEAR AHORA"
+        )
+      )
+    ),
+    
+    // Stats
+    found.length>0&&React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:16}},
+      [{l:"Detectados Hoy",v:found.length,c:C.ok},{l:"Alta Prioridad",v:found.filter(p=>p.prioridad==="critical"||p.prioridad==="high"||p.priority==="critical"||p.priority==="high").length,c:C.hi},{l:"Valor Detectado",v:fmt(found.reduce((s,p)=>s+(p.valor_estimado||p.estimatedValue||0),0)),c:C.acc}].map((k,i)=>
+        React.createElement("div",{key:i,style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:10,padding:"14px 16px",textAlign:"center"}},
+          React.createElement("div",{style:{fontSize:9,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:4}},k.l),
+          React.createElement("div",{style:{fontSize:22,fontWeight:700,color:k.c,fontFamily:F.m}},k.v)
+        )
+      )
+    ),
+
+    // Log
+    React.createElement("div",{style:{flex:1,background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,overflow:"hidden",display:"flex",flexDirection:"column"}},
+      React.createElement("div",{style:{padding:"12px 16px",borderBottom:`1px solid ${C.brd}`,display:"flex",justifyContent:"space-between",alignItems:"center"}},
+        React.createElement("span",{style:{fontSize:11,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1}},"ACTIVIDAD — PORTAL DGCP"),
+        log.length>0&&React.createElement("button",{onClick:()=>setLog([]),style:{background:"none",border:"none",color:C.txD,fontSize:10,fontFamily:F.m,cursor:"pointer"}},"Limpiar")
+      ),
+      React.createElement("div",{style:{flex:1,overflow:"auto",padding:"8px 16px"}},
+        log.length===0?
+          React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:C.txD,fontFamily:F.b,fontSize:13}},"Dale click a \"Escanear Ahora\" para consultar licitaciones del Portal DGCP"):
+          log.map((l,i)=>React.createElement("div",{key:i,style:{display:"flex",gap:10,padding:"6px 0",borderBottom:`1px solid ${C.brd}11`,animation:`slideIn .2s ease`}},
+            React.createElement("span",{style:{fontSize:10,color:C.txD,fontFamily:F.m,flexShrink:0,marginTop:2}},l.time),
+            React.createElement("span",{style:{fontSize:12,color:logColors[l.type]||C.txM,fontFamily:l.type==="project"?F.m:F.b,lineHeight:1.4}},l.msg)
+          ))
+      )
+    )
+  );
+}
+
+// ===== AI CHAT =====
+function AIChat({projects,claudeKey}){
+  const[msgs,setMsgs]=useState([{role:"assistant",content:"Soy tu analista de inteligencia de mercado. Pregúntame sobre el pipeline, estrategias, competidores, o priorización."}]);
+  const[inp,setInp]=useState("");
+  const[loading,setLoading]=useState(false);
+  const ref=useRef(null);
+  useEffect(()=>{if(ref.current)ref.current.scrollTop=ref.current.scrollHeight},[msgs]);
+  
+  const send=useCallback(async()=>{
+    if(!inp.trim()||loading)return;
+    const txt=inp.trim();setInp("");
+    setMsgs(p=>[...p,{role:"user",content:txt}]);setLoading(true);
+    try{
+      if(!claudeKey)throw new Error("No API key");
+      const ctx=projects.slice(0,6).map(p=>`- ${p.title}|${p.type}|${p.province}|${fmt(p.estimatedValue)}|Vol:${p.blastingProbability}%|${p.priority}`).join("\n");
+      const res=await fetch(PROXY_URL,{method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({apiKey:claudeKey,model:"claude-sonnet-4-20250514",max_tokens:1000,
+          system:`Eres analista experto de mercado para empresa de explosivos en RD. Pipeline actual:\n${ctx}\nCompetencia: MAXAM 35%, Expl.Caribe 25%, Austin 15%, Nosotros 18%. Revenue trending $45K→$95K. Win rate 86%. Responde en español, conciso y accionable.`,
+          messages:[...msgs.filter((m,i)=>!(m.role==="assistant"&&i===0)).map(m=>({role:m.role,content:m.content})),{role:"user",content:txt}]
+        })});
+      if(!res.ok)throw new Error();
+      const data=await res.json();
+      setMsgs(p=>[...p,{role:"assistant",content:data.content?.map(i=>i.text||"").join("\n")||"Error."}]);
+    }catch{setMsgs(p=>[...p,{role:"assistant",content:"⚠ Configura tu API Key de Claude en el tab Conexión para usar el AI Analyst."}]);}
+    setLoading(false);
+  },[inp,loading,msgs,projects,claudeKey]);
+
+  const quicks=["¿Qué proyecto priorizo?","Estrategia vs MAXAM","Forecast 3 meses","Riesgos del pipeline"];
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",height:"100%",overflow:"hidden"}},
+    React.createElement("div",{ref,style:{flex:1,overflow:"auto",padding:"16px 20px",display:"flex",flexDirection:"column",gap:12}},
+      msgs.map((m,i)=>React.createElement("div",{key:i,style:{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}},
+        React.createElement("div",{style:{maxWidth:"85%",padding:"10px 14px",borderRadius:m.role==="user"?"12px 12px 2px 12px":"12px 12px 12px 2px",background:m.role==="user"?C.acc+"22":C.bg,border:`1px solid ${m.role==="user"?C.acc+"33":C.brd}`,fontSize:12.5,color:C.tx,fontFamily:F.b,lineHeight:1.6,whiteSpace:"pre-wrap"}},m.content)
+      )),
+      loading&&React.createElement("div",{style:{display:"flex",gap:4,padding:"10px 14px"}},[0,1,2].map(i=>React.createElement("div",{key:i,style:{width:7,height:7,borderRadius:"50%",background:C.acc,animation:`pulse 1.2s ease-in-out ${i*.2}s infinite`}})))
+    ),
+    msgs.length<=2&&React.createElement("div",{style:{padding:"0 16px 8px",display:"flex",flexWrap:"wrap",gap:6}},
+      quicks.map((q,i)=>React.createElement("button",{key:i,onClick:()=>setInp(q),style:{background:C.bg,border:`1px solid ${C.brd}`,borderRadius:20,padding:"5px 12px",fontSize:11,color:C.txM,fontFamily:F.b,cursor:"pointer"}},q))
+    ),
+    React.createElement("div",{style:{padding:"12px 16px",borderTop:`1px solid ${C.brd}`,display:"flex",gap:8}},
+      React.createElement("input",{value:inp,onChange:e=>setInp(e.target.value),onKeyDown:e=>e.key==="Enter"&&send(),placeholder:"Pregunta al AI Analyst...",style:{flex:1,background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 14px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none"}}),
+      React.createElement("button",{onClick:send,style:{background:loading?C.brd:C.acc,border:"none",borderRadius:8,padding:"10px 18px",fontSize:12,fontWeight:700,color:C.bg,fontFamily:F.m,cursor:loading?"wait":"pointer"}},loading?"...":"ENVIAR")
+    )
+  );
+}
+
+// ===== MAIN APP =====
+// ===== KANBAN BOARD =====
+const KANBAN_COLS=[
+  {id:"detectado",label:"Detectado",color:"#5a6577",emoji:"📡"},
+  {id:"contactado",label:"Contactado",color:"#2C6E6A",emoji:"📞"},
+  {id:"cotizado",label:"Cotizado",color:"#f59e0b",emoji:"📄"},
+  {id:"negociacion",label:"Negociando",color:"#8b5cf6",emoji:"🤝"},
+  {id:"ganado",label:"Ganado",color:"#10b981",emoji:"🏆"},
+  {id:"perdido",label:"Perdido",color:"#ef4444",emoji:"❌"}
+];
+
+function KanbanBoard({projects,onUpdateStatus,onSelectProject}){
+  const colProjects=id=>kanbanColProjects(projects,id);
+
+  return React.createElement("div",{style:{display:"flex",gap:12,height:"100%",overflow:"auto",padding:"0 24px 24px"}},
+    KANBAN_COLS.map(col=>
+      React.createElement("div",{key:col.id,style:{minWidth:220,flex:1,display:"flex",flexDirection:"column",gap:8}},
+        // Column header
+        React.createElement("div",{style:{padding:"10px 14px",borderRadius:10,background:C.card,border:`1px solid ${col.color}44`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}},
+          React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6}},
+            React.createElement("span",{style:{fontSize:14}},col.emoji),
+            React.createElement("span",{style:{fontSize:12,fontWeight:700,fontFamily:F.m,color:col.color,textTransform:"uppercase",letterSpacing:.5}},col.label)
+          ),
+          React.createElement("span",{style:{fontSize:11,fontFamily:F.m,color:C.txD,background:C.bg,padding:"2px 8px",borderRadius:10}},colProjects(col.id).length)
+        ),
+        // Cards
+        React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",gap:8,overflowY:"auto",paddingBottom:8}},
+          colProjects(col.id).length===0&&
+            React.createElement("div",{style:{padding:"20px 12px",textAlign:"center",color:C.txD,fontSize:11,fontFamily:F.b,border:`1px dashed ${C.brd}`,borderRadius:10}},"Sin proyectos"),
+          colProjects(col.id).map((p,i)=>
+            React.createElement("div",{key:p.id||i,style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:10,padding:"12px 14px",cursor:"pointer",animation:`slideIn .2s ease ${i*.05}s both`},
+              onMouseEnter:e=>e.currentTarget.style.borderColor=col.color+"66",
+              onMouseLeave:e=>e.currentTarget.style.borderColor=C.brd},
+              // Card header
+              React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}},
+                React.createElement("span",{style:{fontSize:9,fontFamily:F.m,color:pC(p.priority),background:pB(p.priority),padding:"2px 6px",borderRadius:3,textTransform:"uppercase",fontWeight:700}},p.priority),
+                React.createElement("span",{style:{fontSize:11,fontWeight:700,color:C.acc,fontFamily:F.m}},fmt(p.estimatedValue||0))
+              ),
+              // Title
+              React.createElement("div",{onClick:()=>onSelectProject(p),style:{fontSize:12,fontWeight:600,color:C.tx,fontFamily:F.b,marginBottom:6,lineHeight:1.4}},p.title),
+              // Meta
+              React.createElement("div",{style:{fontSize:10,color:C.txM,fontFamily:F.m,marginBottom:10}},
+                (p.type||"")+(p.province?" · "+p.province:"")
+              ),
+              // Gauge mini
+              React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,marginBottom:10}},
+                React.createElement("div",{style:{flex:1,height:4,background:C.bg,borderRadius:2}},
+                  React.createElement("div",{style:{width:(p.blastingProbability||0)+"%",height:"100%",background:p.blastingProbability>=80?C.ok:p.blastingProbability>=60?C.hi:C.md,borderRadius:2}})
+                ),
+                React.createElement("span",{style:{fontSize:10,fontFamily:F.m,color:C.txM}},(p.blastingProbability||0)+"%")
+              ),
+              // Move buttons
+              React.createElement("div",{style:{display:"flex",gap:4}},
+                KANBAN_COLS.indexOf(col)>0&&React.createElement("button",{
+                  onClick:e=>{e.stopPropagation();onUpdateStatus(p,KANBAN_COLS[KANBAN_COLS.indexOf(col)-1].id)},
+                  style:{flex:1,background:C.bg,border:`1px solid ${C.brd}`,borderRadius:6,padding:"4px 0",fontSize:10,color:C.txM,fontFamily:F.m,cursor:"pointer"}},"← Atrás"),
+                KANBAN_COLS.indexOf(col)<KANBAN_COLS.length-1&&React.createElement("button",{
+                  onClick:e=>{e.stopPropagation();onUpdateStatus(p,KANBAN_COLS[KANBAN_COLS.indexOf(col)+1].id)},
+                  style:{flex:1,background:col.color+"22",border:`1px solid ${col.color}44`,borderRadius:6,padding:"4px 0",fontSize:10,color:col.color,fontFamily:F.m,cursor:"pointer",fontWeight:700}},
+                  KANBAN_COLS[KANBAN_COLS.indexOf(col)+1].label+" →")
+              )
+            )
+          )
+        )
+      )
+    )
+  );
+}
+
+// ===== ADJUDICADAS COMPONENT =====
+function Adjudicadas({claudeKey}){
+  const[contratos,setContratos]=useState([]);
+  const[loading,setLoading]=useState(false);
+  const[loaded,setLoaded]=useState(false);
+  const[search,setSearch]=useState("");
+  const[error,setError]=useState("");
+
+  const cargar=useCallback(async()=>{
+    if(!claudeKey){setError("Configura tu API Key de Claude en el tab Conexión");return;}
+    setLoading(true);setError("");
+    try{
+      const found=await buscarAdjudicadas(claudeKey);
+      setContratos(found);
+    }catch(e){setError(e.message);}
+    setLoaded(true);setLoading(false);
+  },[claudeKey]);
+
+  const fmt2=v=>{
+    if(!v)return "—";
+    if(v>=1000000)return `RD$${(v/1000000).toFixed(1)}M`;
+    if(v>=1000)return `RD$${(v/1000).toFixed(0)}K`;
+    return `RD$${v.toLocaleString()}`;
+  };
+
+  const prioColor={alta:C.ok,media:C.hi,baja:C.txM};
+
+  const filtered=contratos.filter(c=>{
+    if(!search)return true;
+    const txt=`${c.proyecto||""} ${c.empresa||""} ${c.institucion||""} ${c.provincia||""}`.toLowerCase();
+    return txt.includes(search.toLowerCase());
+  });
+
+  return React.createElement("div",{style:{animation:"slideIn .3s ease",display:"flex",flexDirection:"column",gap:16}},
+    React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
+      React.createElement("div",null,
+        React.createElement("h2",{style:{fontSize:14,fontWeight:700,fontFamily:F.h,color:C.tx,marginBottom:4}},"Contratos Adjudicados — B2B Leads"),
+        React.createElement("p",{style:{fontSize:12,color:C.txM,fontFamily:F.b}},
+          claudeKey?"Claude busca empresas constructoras que ganaron licitaciones — son tus clientes de explosivos":"⚠ Configura tu API Key de Claude en el tab Conexión"
+        )
+      ),
+      React.createElement("button",{onClick:cargar,disabled:loading||!claudeKey,style:{background:loading?"transparent":C.acc,border:loading?`2px solid ${C.acc}`:"none",borderRadius:8,padding:"10px 20px",fontSize:12,fontWeight:700,color:loading?C.acc:C.bg,fontFamily:F.m,cursor:(loading||!claudeKey)?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:8,opacity:claudeKey?1:0.4}},
+        loading&&React.createElement("span",{style:{display:"inline-flex",animation:"spin 1s linear infinite"}},"⟳"),
+        loading?"BUSCANDO...":"🏗️ BUSCAR ADJUDICADAS"
+      )
+    ),
+
+    error&&React.createElement("div",{style:{background:"#ef444422",border:"1px solid #ef4444",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#ef4444",fontFamily:F.b}},`❌ ${error}`),
+
+    loaded&&contratos.length>0&&React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}},
+      [{l:"Empresas Encontradas",v:contratos.length,c:C.ok},{l:"Valor Total",v:fmt2(contratos.reduce((s,c)=>s+(c.valor_dop||0),0)),c:C.acc},{l:"Alta Prioridad",v:contratos.filter(c=>c.prioridad_contacto==="alta").length,c:C.hi}]
+      .map((k,i)=>React.createElement("div",{key:i,style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:10,padding:"14px 16px",textAlign:"center"}},
+        React.createElement("div",{style:{fontSize:9,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:4}},k.l),
+        React.createElement("div",{style:{fontSize:20,fontWeight:700,color:k.c,fontFamily:F.m}},k.v)
+      ))
+    ),
+
+    loaded&&contratos.length>0&&React.createElement("input",{
+      placeholder:"Buscar por empresa, proyecto o provincia...",
+      value:search,onChange:e=>setSearch(e.target.value),
+      style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 14px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none",width:"100%",boxSizing:"border-box"}
+    }),
+
+    !loaded?React.createElement("div",{style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,padding:40,textAlign:"center"}},
+      React.createElement("div",{style:{fontSize:32,marginBottom:12}},"🏗️"),
+      React.createElement("div",{style:{fontSize:14,fontWeight:600,fontFamily:F.h,color:C.tx,marginBottom:8}},"Empresas que Ganaron Contratos de Obras"),
+      React.createElement("div",{style:{fontSize:12,color:C.txM,fontFamily:F.b,maxWidth:420,margin:"0 auto",lineHeight:1.7}},
+        "Claude busca en el portal DGCP y noticias recientes qué constructoras ganaron contratos de carreteras, presas, minería. Esas empresas necesitan explosivos — son tus clientes."
+      )
+    ):filtered.length===0?
+      React.createElement("div",{style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,padding:32,textAlign:"center",color:C.txD,fontFamily:F.b,fontSize:13}},"No se encontraron contratos adjudicados relevantes"):
+    React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:10}},
+      filtered.map((c,i)=>React.createElement("div",{key:i,style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,padding:"16px 18px"}},
+        React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}},
+          React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10}},
+            React.createElement("div",{style:{width:36,height:36,borderRadius:8,background:"#10b98122",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}},"🏢"),
+            React.createElement("div",null,
+              React.createElement("div",{style:{fontSize:13,fontWeight:700,color:C.ok,fontFamily:F.h}},(c.empresa||"Empresa desconocida").toUpperCase()),
+              React.createElement("div",{style:{fontSize:10,color:C.txD,fontFamily:F.m,marginTop:2}},`Adjudicado: ${c.fecha_adjudicacion||"—"} • ${c.tipo||"Obras"} • ${c.provincia||"RD"}`)
+            )
+          ),
+          React.createElement("div",{style:{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}},
+            React.createElement("div",{style:{fontSize:16,fontWeight:700,color:C.acc,fontFamily:F.m}},fmt2(c.valor_dop)),
+            React.createElement("span",{style:{fontSize:10,fontWeight:700,fontFamily:F.m,color:prioColor[c.prioridad_contacto]||C.txM,background:(prioColor[c.prioridad_contacto]||C.txM)+"22",padding:"2px 8px",borderRadius:4}},
+              (c.prioridad_contacto||"media").toUpperCase()
+            )
+          )
+        ),
+        React.createElement("div",{style:{fontSize:12,fontWeight:600,color:C.tx,fontFamily:F.b,marginBottom:6}},c.proyecto||"Sin nombre"),
+        c.por_que_necesita_explosivos&&React.createElement("div",{style:{fontSize:11,color:C.txM,fontFamily:F.b,marginBottom:10,lineHeight:1.5,padding:"8px 10px",background:C.bg,borderRadius:6,borderLeft:`3px solid ${C.acc}`}},
+          `💡 ${c.por_que_necesita_explosivos}`
+        ),
+        React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+          React.createElement("span",{style:{fontSize:11,color:C.txM,fontFamily:F.b}},`📌 ${c.institucion||"—"}`),
+          isSafeUrl(c.url)&&React.createElement("a",{href:c.url,target:"_blank",rel:"noopener noreferrer",style:{fontSize:11,fontWeight:600,color:C.acc,fontFamily:F.m,textDecoration:"none",padding:"4px 12px",border:`1px solid ${C.acc}44`,borderRadius:6}},"Ver Contrato →")
+        )
+      ))
+    )
+  );
+}
+
+function App(){
+  const[darkMode,setDarkMode]=useState(()=>{try{return localStorage.getItem('geoTheme')!=='light'}catch(e){return true}});
+  Object.assign(C,darkMode?DARK_C:LIGHT_C);
+  useEffect(()=>{try{localStorage.setItem('geoTheme',darkMode?'dark':'light')}catch(e){}; document.body.classList.toggle('light-mode',!darkMode);},[darkMode]);
+  const[tab,setTab]=useState("dashboard");
+  const[sel,setSel]=useState(null);
+  const[search,setSearch]=useState("");
+  const[filter,setFilter]=useState("all");
+  const[showAddForm,setShowAddForm]=useState(false);
+  const[newProj,setNewProj]=useState({titulo:"",tipo:"Carreteras",region:"Norte",provincia:"",valor:0,prob:70,descripcion:"",contacto:"",telefono:"",whatsapp:"",email:"",empresa:"",fuente:"Manual"});
+  const[sidebarOpen,setSidebarOpen]=useState(false);
+  const[historical]=useState(DEFAULT_HISTORICAL);
+  const savedConfig=useRef(null);
+  if(!savedConfig.current){
+    try{
+      const saved=window.sessionStorage.getItem("geotechnical_apikey");
+      if(saved)savedConfig.current={claudeKey:saved};
+    }catch(e){savedConfig.current=null;}
+  }
+  const[config,setConfig]=useState(savedConfig.current||{claudeKey:""});
+
+  // Save API key to sessionStorage only (never localStorage)
+  useEffect(()=>{
+    try{if(config.claudeKey)window.sessionStorage.setItem("geotechnical_apikey",config.claudeKey);else window.sessionStorage.removeItem("geotechnical_apikey");}catch(e){}
+  },[config]);
+
+  // SAVED projects = your real pipeline (persisted in localStorage)
+  const savedProjects=useRef(null);
+  if(!savedProjects.current){
+    try{
+      const saved=window.localStorage.getItem("geotechnical_pipeline");
+      if(saved)savedProjects.current=JSON.parse(saved);
+    }catch(e){savedProjects.current=null;}
+  }
+  const[projects,setProjects]=useState(savedProjects.current||[]);
+  
+  // Save pipeline whenever it changes
+  useEffect(()=>{
+    try{window.localStorage.setItem("geotechnical_pipeline",JSON.stringify(projects));}catch(e){}
+  },[projects]);
+
+  // CANDIDATES = temporary results from scanner (not saved)
+  const[candidates,setCandidates]=useState([]);
+
+  const[showAlerts,setShowAlerts]=useState(false);
+  const[alerts,setAlerts]=useState([]);
+
+  // Handle new projects from scanner → go to CANDIDATES (not pipeline)
+  const handleNewProjects=useCallback((newProjects)=>{
+    const existingTitles=[...projects,...candidates].map(p=>(p.title||"").toLowerCase());
+    const formatted=newProjects.filter(p=>!existingTitles.includes((p.titulo||p.title||"").toLowerCase())).map(normalizeProject);
+    if(formatted.length>0){
+      setCandidates(prev=>[...formatted,...prev]);
+      setAlerts(a=>[...formatted.map((p,i)=>({id:Date.now()+i,text:`Detectado: ${p.title}`,time:"Ahora",read:false})),...a]);
+    }
+  },[projects,candidates]);
+
+  // Approve candidate → move to pipeline (saved)
+  const approveProject=useCallback((project)=>{
+    setProjects(prev=>[project,...prev]);
+    setCandidates(prev=>prev.filter(c=>(c.id||c.title)!==(project.id||project.title)));
+  },[]);
+
+  // Dismiss candidate
+  const dismissCandidate=useCallback((project)=>{
+    setCandidates(prev=>prev.filter(c=>(c.id||c.title)!==(project.id||project.title)));
+  },[]);
+
+  // Approve all candidates
+  const approveAll=useCallback(()=>{
+    setProjects(prev=>[...candidates,...prev]);
+    setCandidates([]);
+  },[candidates]);
+
+  const filtered=projects.filter(p=>{
+    const ms=!search||p.title?.toLowerCase().includes(search.toLowerCase())||p.province?.toLowerCase().includes(search.toLowerCase())||p.type?.toLowerCase().includes(search.toLowerCase());
+    return ms&&(filter==="all"||p.priority===filter);
+  });
+  const totVal=projects.reduce((s,p)=>s+(p.estimatedValue||0),0);
+  const critN=projects.filter(p=>p.priority==="critical").length;
+  const avgB=Math.round(projects.reduce((s,p)=>s+(p.blastingProbability||0),0)/(projects.length||1));
+  const lastWR=historical[historical.length-1].winRate;
+
+  const navs=[
+    {id:"dashboard",label:"Dashboard",ico:"📊"},
+    {id:"pipeline",label:"Pipeline",ico:"📋"},
+    {id:"kanban",label:"Kanban",ico:"🗂️"},
+    {id:"scanner",label:"Escáner",ico:"🔍"},
+    {id:"adjudicadas",label:"Adjudicadas",ico:"🏗️"},
+    {id:"ai",label:"AI Analyst",ico:"🧠"},
+    {id:"settings",label:"Conexión",ico:"⚙️"}
+  ];
+
+  const updateKanbanStatus=useCallback((project,newStatus)=>{
+    setProjects(prev=>prev.map(p=>(p.id||p.title)===(project.id||project.title)?{...p,kanbanStatus:newStatus}:p));
+  },[]);
+
+  const exportToExcel=useCallback(()=>{
+    if(!projects.length){alert("No hay proyectos en el pipeline.");return;}
+    const rows=projects.map(p=>({
+      "ID":p.id||"",
+      "Título":p.title||"",
+      "Tipo":p.type||"",
+      "Provincia":p.province||"",
+      "Región":p.region||"",
+      "Valor Estimado (USD)":p.estimatedValue||0,
+      "Prob. Voladura (%)":p.blastingProbability||0,
+      "Prioridad":p.priority||"",
+      "Status Pipeline":p.kanbanStatus||p.status||"detectado",
+      "Status Detección":p.status||"",
+      "Fecha Detección":p.detectedDate||"",
+      "Inicio Estimado":p.estimatedStart||"",
+      "Fuente":p.source||"",
+      "Contacto":p.contactLead||"",
+      "Señales":(p.signals||[]).join("; "),
+      "Competencia":(p.competitors||[]).join("; "),
+      "Análisis AI":p.aiInsight||"",
+      "URL Licitación":p.urlLicitacion||p.url_licitacion||"",
+      "URL Fuente":p.urlFuente||p.url_fuente||""
+    }));
+    const ws=XLSX.utils.json_to_sheet(rows);
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,"Pipeline",ws);
+    ws["!cols"]=[{wch:12},{wch:40},{wch:16},{wch:16},{wch:12},{wch:18},{wch:16},{wch:12},{wch:16},{wch:16},{wch:14},{wch:14},{wch:20},{wch:30},{wch:40},{wch:30},{wch:60},{wch:40}];
+    XLSX.writeFile(wb,"GEOTECHNICAL_Pipeline_"+new Date().toISOString().split("T")[0]+".xlsx");
+  },[projects]);
+
+  const addManualProject=useCallback(()=>{
+    if(!newProj.titulo.trim()){alert("Pon el nombre del proyecto.");return;}
+    const p={
+      id:"MAN-"+Date.now().toString(36),
+      title:newProj.titulo,type:newProj.tipo,region:newProj.region,province:newProj.provincia,
+      estimatedValue:Number(newProj.valor)||0,blastingProbability:Number(newProj.prob)||50,
+      description:newProj.descripcion,contactLead:newProj.contacto,source:newProj.fuente||"Manual",
+      telefono:newProj.telefono,whatsapp:newProj.whatsapp,email:newProj.email,empresa:newProj.empresa,
+      detectedDate:new Date().toISOString().split("T")[0],status:"detectado",kanbanStatus:"detectado",
+      priority:Number(newProj.prob)>=80?"high":Number(newProj.prob)>=50?"medium":"low",
+      signals:[],competitors:[],aiInsight:"Proyecto agregado manualmente",notes:[]
+    };
+    setProjects(prev=>[p,...prev]);
+    setNewProj({titulo:"",tipo:"Carreteras",region:"Norte",provincia:"",valor:0,prob:70,descripcion:"",contacto:"",telefono:"",whatsapp:"",email:"",empresa:"",fuente:"Manual"});
+    setShowAddForm(false);
+  },[newProj]);
+
+  // Update any project field
+  const updateProject=useCallback((projectId,updates)=>{
+    setProjects(prev=>prev.map(p=>(p.id||p.title)===(projectId)?{...p,...updates}:p));
+    // Also update sel if viewing
+    setSel(prev=>prev&&(prev.id||prev.title)===projectId?{...prev,...updates}:prev);
+  },[]);
+
+  // Add note to project
+  const addNote=useCallback((projectId,text)=>{
+    if(!text.trim())return;
+    const note={id:Date.now(),text,date:new Date().toLocaleString("es-DO",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"})};
+    setProjects(prev=>prev.map(p=>(p.id||p.title)===projectId?{...p,notes:[note,...(p.notes||[])]}:p));
+    setSel(prev=>prev&&(prev.id||prev.title)===projectId?{...prev,notes:[note,...(prev.notes||[])]}:prev);
+  },[]);
+
+  // Backup export
+  const exportBackup=useCallback(()=>{
+    const data={projects,config:{claudeKey:config.claudeKey?"***REDACTED***":""},exportDate:new Date().toISOString(),version:"3.0"};
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");a.href=url;a.download="GEOTECHNICAL_Backup_"+new Date().toISOString().split("T")[0]+".json";a.click();URL.revokeObjectURL(url);
+  },[projects,config]);
+
+  // Backup import
+  const importBackup=useCallback((e)=>{
+    const file=e.target.files[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=(ev)=>{
+      try{
+        const data=JSON.parse(ev.target.result);
+        if(data.projects&&Array.isArray(data.projects)){
+          if(confirm(`Importar ${data.projects.length} proyectos? (${data.exportDate||"fecha desconocida"})\nEsto reemplazará todos los proyectos actuales.`)){
+            setProjects(data.projects.map(normalizeProject));
+          }
+        }else{alert("Archivo de backup inválido.");}
+      }catch(err){alert("Error leyendo archivo: "+err.message);}
+    };
+    reader.readAsText(file);
+  },[]);
+
+  // Check reminders on load (once only to prevent infinite loop)
+  const reminderChecked=useRef(false);
+  useEffect(()=>{
+    if(reminderChecked.current)return;
+    reminderChecked.current=true;
+    const today=new Date().toISOString().split("T")[0];
+    projects.forEach(p=>{
+      if(p.reminder&&p.reminder<=today&&!p.reminderShown){
+        setAlerts(a=>[{id:Date.now()+Math.random(),text:`⏰ Recordatorio: ${p.title} — ${p.reminderNote||"Seguimiento pendiente"}`,time:"Hoy",read:false},...a]);
+        updateProject(p.id||p.title,{reminderShown:true});
+      }
+    });
+  },[projects]);
+
+  const hr=(e,on)=>{e.currentTarget.style.background=on?C.hover:"transparent"};
+
+  return React.createElement("div",{style:{fontFamily:F.b,background:C.bg,color:C.tx,height:"100vh",display:"flex",overflow:"hidden"}},
+    React.createElement("style",null,`@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');`),
+
+    // Mobile overlay
+    sidebarOpen&&React.createElement("div",{className:"geo-overlay",onClick:()=>setSidebarOpen(false),style:{display:"none",position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:899}}),
+    // SIDEBAR
+    React.createElement("div",{className:"geo-sidebar"+(sidebarOpen?" open":""),style:{width:210,background:C.side,borderRight:`1px solid ${C.brd}`,display:"flex",flexDirection:"column",flexShrink:0}},
+      React.createElement("div",{style:{padding:"20px 16px",borderBottom:`1px solid ${C.brd}`}},
+        React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10}},
+          React.createElement("svg",{width:44,height:44,viewBox:"0 0 100 100",style:{flexShrink:0}},
+            React.createElement("circle",{cx:50,cy:50,r:48,fill:"#fff",stroke:"#2C6E6A",strokeWidth:5}),
+            React.createElement("circle",{cx:50,cy:43,r:7,fill:"#A63D40"}),
+            React.createElement("circle",{cx:54,cy:39,r:3.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:46,cy:39,r:3.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:54,cy:47,r:3.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:46,cy:47,r:3.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:59,cy:34,r:5.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:41,cy:34,r:5.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:59,cy:52,r:5.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:41,cy:52,r:5.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:63,cy:30,r:3.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:37,cy:30,r:3.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:63,cy:56,r:3.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:37,cy:56,r:3.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:66,cy:26,r:4,fill:"#A63D40"}),
+            React.createElement("circle",{cx:34,cy:26,r:4,fill:"#A63D40"}),
+            React.createElement("circle",{cx:66,cy:60,r:4,fill:"#A63D40"}),
+            React.createElement("circle",{cx:34,cy:60,r:4,fill:"#A63D40"}),
+            React.createElement("circle",{cx:69,cy:22,r:2.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:31,cy:22,r:2.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:69,cy:64,r:2.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:31,cy:64,r:2.5,fill:"#A63D40"}),
+            React.createElement("circle",{cx:72,cy:19,r:2,fill:"#A63D40"}),
+            React.createElement("circle",{cx:28,cy:19,r:2,fill:"#A63D40"}),
+            React.createElement("circle",{cx:72,cy:67,r:2,fill:"#A63D40"}),
+            React.createElement("circle",{cx:28,cy:67,r:2,fill:"#A63D40"}),
+            React.createElement("text",{x:50,y:87,textAnchor:"middle",fontFamily:"Arial,sans-serif",fontSize:9,fontWeight:"700",fill:"#2C6E6A",letterSpacing:"0.5"},"GEOTECHNICAL")
+          ),
+          React.createElement("div",null,
+            React.createElement("div",{style:{fontSize:12,fontWeight:700,fontFamily:F.h,color:C.tx}},"GEOTECHNICAL"),
+            React.createElement("div",{style:{fontSize:8,color:"#2C6E6A",fontFamily:F.m,letterSpacing:1,fontWeight:600}},"BLASTING EXPERTS")
+          )
+        )
+      ),
+      React.createElement("nav",{style:{flex:1,padding:"12px 8px"}},
+        navs.map(n=>React.createElement("button",{key:n.id,onClick:()=>setTab(n.id),style:{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",marginBottom:2,background:tab===n.id?C.accG:"transparent",border:tab===n.id?`1px solid ${C.acc}33`:"1px solid transparent",borderRadius:8,cursor:"pointer",color:tab===n.id?C.acc:C.txM,fontFamily:F.b,fontSize:13,fontWeight:tab===n.id?600:400}},
+          React.createElement("span",{style:{fontSize:15}},n.ico),n.label,
+          n.id==="scanner"&&candidates.length>0&&React.createElement("span",{style:{marginLeft:"auto",minWidth:18,height:18,borderRadius:9,background:C.acc,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:700,color:C.bg,fontFamily:F.m}},candidates.length),
+          n.id==="scanner"&&config.claudeKey&&React.createElement("span",{style:{marginLeft:"auto",width:6,height:6,borderRadius:"50%",background:C.ok}})
+        ))
+      ),
+      React.createElement("div",{style:{padding:"12px"}},
+        React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.brd}`}},
+          React.createElement("div",{style:{width:8,height:8,borderRadius:"50%",background:config.claudeKey?C.ok:C.acc,animation:config.claudeKey?"none":"pulse 2s infinite"}}),
+          React.createElement("div",null,
+            React.createElement("div",{style:{fontSize:10,fontFamily:F.m,color:config.claudeKey?C.ok:C.acc,fontWeight:600}},config.claudeKey?"CLAUDE ACTIVO":"SIN API KEY"),
+            React.createElement("div",{style:{fontSize:9,color:C.txD,fontFamily:F.m}},config.claudeKey?"Escáner listo":"Configurar →")
+          )
+        )
+      ),
+      React.createElement("div",{style:{padding:"8px 12px 16px"}},
+        React.createElement("div",{style:{background:C.bg,borderRadius:8,padding:12,border:`1px solid ${C.brd}`}},
+          React.createElement("div",{style:{fontSize:9,color:C.txD,fontFamily:F.m,letterSpacing:1,marginBottom:6}},"PIPELINE TOTAL"),
+          React.createElement("div",{style:{fontSize:20,fontWeight:700,color:C.acc,fontFamily:F.m}},fmt(totVal)),
+          React.createElement("div",{style:{fontSize:10,color:C.ok,fontFamily:F.m,marginTop:4}},"↑ "+projects.length+" proyectos")
+        )
+      )
+    ),
+
+    // MAIN
+    React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}},
+      // Top
+      React.createElement("div",{style:{padding:"12px 24px",borderBottom:`1px solid ${C.brd}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}},
+        React.createElement("div",{style:{display:"flex",alignItems:"center",gap:12}},
+          React.createElement("button",{onClick:()=>setSidebarOpen(!sidebarOpen),style:{display:"none",background:"none",border:`1px solid ${C.brd}`,borderRadius:6,padding:"6px 10px",cursor:"pointer",color:C.tx,fontSize:16},className:"geo-hamburger"},"☰"),
+          React.createElement("div",null,
+          React.createElement("h1",{style:{fontSize:16,fontWeight:700,fontFamily:F.h,color:C.tx}},navs.find(n=>n.id===tab)?.label),
+          React.createElement("div",{style:{fontSize:11,color:C.txD,fontFamily:F.m,marginTop:2}},
+            (config.claudeKey?"🟢 Claude activo · LocalStorage":"⚪ Configura tu API Key")+" · "+new Date().toLocaleTimeString("es-DO",{hour:"2-digit",minute:"2-digit"})
+          )
+        )),
+        React.createElement("div",{style:{display:"flex",gap:8,alignItems:"center"}},
+          React.createElement("button",{onClick:()=>setDarkMode(!darkMode),title:darkMode?"Modo claro":"Modo oscuro",style:{background:"transparent",border:`1px solid ${C.brd}`,borderRadius:8,padding:"8px 12px",cursor:"pointer",color:C.txM,fontSize:16,lineHeight:1}},darkMode?"☀️":"🌙"),
+        React.createElement("div",{style:{position:"relative"}},
+          React.createElement("button",{onClick:()=>setShowAlerts(!showAlerts),style:{background:showAlerts?C.accG:"transparent",border:`1px solid ${C.brd}`,borderRadius:8,padding:"8px 12px",cursor:"pointer",color:C.txM,fontSize:14,position:"relative"}},"🔔",
+            alerts.filter(a=>!a.read).length>0&&React.createElement("div",{style:{position:"absolute",top:-3,right:-3,width:14,height:14,borderRadius:"50%",background:C.cr,fontSize:8,fontWeight:700,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:F.m}},alerts.filter(a=>!a.read).length)
+          ),
+          showAlerts&&React.createElement("div",{style:{position:"absolute",top:"110%",right:0,width:320,background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,overflow:"hidden",zIndex:100,boxShadow:"0 12px 40px rgba(0,0,0,.4)"}},
+            React.createElement("div",{style:{padding:"12px 16px",borderBottom:`1px solid ${C.brd}`,display:"flex",justifyContent:"space-between",alignItems:"center"}},
+              React.createElement("span",{style:{fontSize:12,fontWeight:700,fontFamily:F.m,color:C.tx}},"ALERTAS"),
+              React.createElement("div",{style:{display:"flex",gap:8}},
+                alerts.some(a=>a.read)&&React.createElement("button",{onClick:()=>setAlerts(p=>p.filter(a=>!a.read)),style:{background:"none",border:"none",color:C.txD,fontSize:10,fontFamily:F.m,cursor:"pointer"}},"Borrar leídas"),
+                alerts.length>0&&React.createElement("button",{onClick:()=>setAlerts([]),style:{background:"none",border:"none",color:C.cr,fontSize:10,fontFamily:F.m,cursor:"pointer"}},"Borrar todo")
+              )
+            ),
+            alerts.length===0?
+              React.createElement("div",{style:{padding:"20px 16px",fontSize:12,color:C.txD,fontFamily:F.b,textAlign:"center"}},"Sin alertas nuevas"):
+              alerts.slice(0,8).map(a=>React.createElement("div",{key:a.id,onClick:()=>setAlerts(p=>p.map(al=>al.id===a.id?{...al,read:true}:al)),style:{padding:"12px 16px",borderBottom:`1px solid ${C.brd}`,cursor:"pointer",background:a.read?"transparent":C.accG}},
+                React.createElement("div",{style:{fontSize:12,color:C.tx,fontFamily:F.b,marginBottom:4}},a.text),
+                React.createElement("div",{style:{fontSize:10,color:C.txD,fontFamily:F.m}},a.time)
+              ))
+          )
+        )
+        )
+      ),
+
+      // Content
+      React.createElement("div",{style:{flex:1,overflow:"auto",padding:tab==="ai"||tab==="kanban"?0:24}},
+
+        // DASHBOARD
+        tab==="dashboard"&&React.createElement("div",{style:{animation:"slideIn .3s ease"}},
+          React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:16,marginBottom:24}},
+            [{l:"Pipeline Total",v:fmt(totVal),s:projects.length+" proyectos",c:C.acc},{l:"Alertas Críticas",v:critN,s:"Requieren acción",c:C.cr},{l:"Prob. Voladura",v:avgB+"%",s:"Promedio pipeline",c:C.ok},{l:"Win Rate",v:lastWR+"%",s:"Últimos 6 meses",c:C.md}].map((k,i)=>
+              React.createElement("div",{key:i,style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,padding:"18px 20px"}},
+                React.createElement("div",{style:{fontSize:10,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:12}},k.l),
+                React.createElement("div",{style:{fontSize:26,fontWeight:700,color:k.c,fontFamily:F.m,marginBottom:4}},k.v),
+                React.createElement("div",{style:{fontSize:11,color:C.txM,fontFamily:F.b}},k.s)
+              ))
+          ),
+          // PIPELINE POR ETAPA KANBAN
+          React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:24}},
+            React.createElement("div",{style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,padding:20}},
+              React.createElement("div",{style:{fontSize:11,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:16}},"VALOR POR ETAPA"),
+              React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+                KANBAN_COLS.map(col=>{
+                  const prjs=kanbanColProjects(projects,col.id);
+                  const val=prjs.reduce((s,p)=>s+(p.estimatedValue||0),0);
+                  const maxVal=Math.max(...KANBAN_COLS.map(c=>kanbanColProjects(projects,c.id).reduce((s,p)=>s+(p.estimatedValue||0),0)),1);
+                  return React.createElement("div",{key:col.id,style:{display:"flex",alignItems:"center",gap:8}},
+                    React.createElement("span",{style:{fontSize:10,color:C.txM,fontFamily:F.m,width:80,textAlign:"right"}},col.label),
+                    React.createElement("div",{style:{flex:1,height:16,background:C.bg,borderRadius:4,overflow:"hidden"}},
+                      React.createElement("div",{style:{height:"100%",width:`${(val/maxVal)*100}%`,background:col.color,borderRadius:4,minWidth:val>0?4:0,transition:"width .5s"}})
+                    ),
+                    React.createElement("span",{style:{fontSize:10,color:C.tx,fontFamily:F.m,width:70,textAlign:"right"}},fmt(val)),
+                    React.createElement("span",{style:{fontSize:9,color:C.txD,fontFamily:F.m}},"("+prjs.length+")")
+                  );
+                })
+              )
+            ),
+            React.createElement("div",{style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,padding:20}},
+              React.createElement("div",{style:{fontSize:11,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:16}},"PROYECTOS POR TIPO"),
+              React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:6}},
+                (()=>{
+                  const types={};projects.forEach(p=>{const t=p.type||"Otro";types[t]=(types[t]||0)+1;});
+                  const sorted=Object.entries(types).sort((a,b)=>b[1]-a[1]);
+                  const mx=Math.max(...sorted.map(s=>s[1]),1);
+                  return sorted.map(([t,c])=>React.createElement("div",{key:t,style:{display:"flex",alignItems:"center",gap:8}},
+                    React.createElement("span",{style:{fontSize:10,color:C.txM,fontFamily:F.m,width:90,textAlign:"right",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},t),
+                    React.createElement("div",{style:{flex:1,height:14,background:C.bg,borderRadius:3,overflow:"hidden"}},
+                      React.createElement("div",{style:{height:"100%",width:`${(c/mx)*100}%`,background:C.acc,borderRadius:3,minWidth:4}})
+                    ),
+                    React.createElement("span",{style:{fontSize:11,fontWeight:700,color:C.tx,fontFamily:F.m,width:20}},c)
+                  ));
+                })()
+              )
+            )
+          ),
+          React.createElement("div",{style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,overflow:"hidden"}},
+            React.createElement("div",{style:{padding:"16px 20px",borderBottom:`1px solid ${C.brd}`,display:"flex",justifyContent:"space-between"}},
+              React.createElement("span",{style:{fontSize:11,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1}},"TOP OPORTUNIDADES"),
+              React.createElement("button",{onClick:()=>setTab("pipeline"),style:{background:"none",border:"none",color:C.acc,fontSize:11,fontFamily:F.m,cursor:"pointer"}},"Ver todo →")
+            ),
+            projects.filter(p=>p.priority==="critical"||p.priority==="high").slice(0,4).map((p,i)=>
+              React.createElement("div",{key:p.id||i,onClick:()=>setSel(p),style:{padding:"14px 20px",borderBottom:`1px solid ${C.brd}`,display:"flex",alignItems:"center",gap:16,cursor:"pointer"},onMouseEnter:e=>hr(e,true),onMouseLeave:e=>hr(e,false)},
+                React.createElement(Gauge,{value:p.blastingProbability||0,size:42}),
+                React.createElement("div",{style:{flex:1}},
+                  React.createElement("div",{style:{fontSize:13,fontWeight:600,color:C.tx,fontFamily:F.b,marginBottom:3}},p.title),
+                  React.createElement("div",{style:{fontSize:11,color:C.txM,fontFamily:F.m}},p.type+" · "+p.province+" · "+sL(p.status))
+                ),
+                React.createElement("div",{style:{textAlign:"right"}},
+                  React.createElement("div",{style:{fontSize:14,fontWeight:700,color:C.acc,fontFamily:F.m}},fmt(p.estimatedValue||0)),
+                  React.createElement("span",{style:{fontSize:9,fontFamily:F.m,color:pC(p.priority),background:pB(p.priority),padding:"2px 6px",borderRadius:3,textTransform:"uppercase",fontWeight:700}},p.priority)
+                )
+              )
+            ),
+            projects.length===0&&React.createElement("div",{style:{padding:"40px 20px",textAlign:"center",color:C.txD,fontFamily:F.b,fontSize:13}},"Usa el Escáner para detectar proyectos y apruébalos al pipeline")
+          )
+        ),
+
+        // PIPELINE
+        tab==="pipeline"&&React.createElement("div",{style:{animation:"slideIn .3s ease"}},
+          React.createElement("div",{style:{display:"flex",gap:12,marginBottom:20,alignItems:"center",flexWrap:"wrap"}},
+            React.createElement("input",{value:search,onChange:e=>setSearch(e.target.value),placeholder:"🔍 Buscar proyecto...",style:{flex:1,maxWidth:360,background:C.card,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 14px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none"}}),
+            ["all","critical","high","medium"].map(p=>
+              React.createElement("button",{key:p,onClick:()=>setFilter(p),style:{background:filter===p?(p==="all"?C.accG:pB(p)):"transparent",border:`1px solid ${filter===p?(p==="all"?C.acc+"44":pC(p)+"44"):C.brd}`,borderRadius:6,padding:"7px 14px",fontSize:11,fontFamily:F.m,color:filter===p?(p==="all"?C.acc:pC(p)):C.txM,cursor:"pointer",textTransform:"capitalize",fontWeight:filter===p?700:400}},p==="all"?"Todos":p)
+            ),
+            React.createElement("button",{onClick:()=>setShowAddForm(true),style:{background:C.acc,border:"none",borderRadius:8,padding:"8px 14px",fontSize:11,fontWeight:700,color:C.bg,fontFamily:F.m,cursor:"pointer",display:"flex",alignItems:"center",gap:6}},"+  Agregar Proyecto"),
+            React.createElement("button",{onClick:exportToExcel,title:"Exportar a Excel",style:{background:C.okBg,border:`1px solid ${C.ok}44`,borderRadius:8,padding:"8px 14px",fontSize:11,fontWeight:700,color:C.ok,fontFamily:F.m,cursor:"pointer",display:"flex",alignItems:"center",gap:6}},"📥 Exportar Excel")
+          ),
+          // ADD PROJECT MODAL
+          showAddForm&&React.createElement("div",{onClick:()=>setShowAddForm(false),style:{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:20}},
+            React.createElement("div",{onClick:e=>e.stopPropagation(),style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:16,maxWidth:520,width:"100%",maxHeight:"85vh",overflow:"auto"}},
+              React.createElement("div",{style:{padding:"20px 24px",borderBottom:`1px solid ${C.brd}`,display:"flex",justifyContent:"space-between",alignItems:"center"}},
+                React.createElement("h3",{style:{fontSize:15,fontWeight:700,fontFamily:F.h,color:C.tx,margin:0}},"Agregar Proyecto Manual"),
+                React.createElement("button",{onClick:()=>setShowAddForm(false),style:{background:"none",border:"none",color:C.txM,cursor:"pointer",fontSize:18}},"✕")
+              ),
+              React.createElement("div",{style:{padding:"20px 24px",display:"flex",flexDirection:"column",gap:14}},
+                React.createElement("div",null,
+                  React.createElement("label",{style:{fontSize:10,fontFamily:F.m,color:C.txD,textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"block"}},"NOMBRE DEL PROYECTO *"),
+                  React.createElement("input",{value:newProj.titulo,onChange:e=>setNewProj(p=>({...p,titulo:e.target.value})),placeholder:"Ej: Carretera Santiago — Puerto Plata",style:{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 12px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none"}})
+                ),
+                React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}},
+                  React.createElement("div",null,
+                    React.createElement("label",{style:{fontSize:10,fontFamily:F.m,color:C.txD,textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"block"}},"TIPO DE OBRA"),
+                    React.createElement("select",{value:newProj.tipo,onChange:e=>setNewProj(p=>({...p,tipo:e.target.value})),style:{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 12px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none"}},
+                      ["Carreteras","Hidroeléctrica","Metro/Túnel","Minería","Industrial","Portuario","Cantera","Otro"].map(t=>React.createElement("option",{key:t,value:t},t))
+                    )
+                  ),
+                  React.createElement("div",null,
+                    React.createElement("label",{style:{fontSize:10,fontFamily:F.m,color:C.txD,textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"block"}},"REGIÓN"),
+                    React.createElement("select",{value:newProj.region,onChange:e=>setNewProj(p=>({...p,region:e.target.value})),style:{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 12px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none"}},
+                      ["Norte","Sur","Este","Oeste","DN","Noroeste","Noreste","Suroeste","Sureste"].map(r=>React.createElement("option",{key:r,value:r},r))
+                    )
+                  )
+                ),
+                React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}},
+                  React.createElement("div",null,
+                    React.createElement("label",{style:{fontSize:10,fontFamily:F.m,color:C.txD,textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"block"}},"PROVINCIA"),
+                    React.createElement("input",{value:newProj.provincia,onChange:e=>setNewProj(p=>({...p,provincia:e.target.value})),placeholder:"Ej: Santiago",style:{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 12px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none"}})
+                  ),
+                  React.createElement("div",null,
+                    React.createElement("label",{style:{fontSize:10,fontFamily:F.m,color:C.txD,textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"block"}},"VALOR (RD$)"),
+                    React.createElement("input",{type:"number",value:newProj.valor,onChange:e=>setNewProj(p=>({...p,valor:e.target.value})),placeholder:"0",style:{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 12px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none"}})
+                  ),
+                  React.createElement("div",null,
+                    React.createElement("label",{style:{fontSize:10,fontFamily:F.m,color:C.txD,textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"block"}},"% VOLADURA"),
+                    React.createElement("input",{type:"number",min:0,max:100,value:newProj.prob,onChange:e=>setNewProj(p=>({...p,prob:e.target.value})),style:{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 12px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none"}})
+                  )
+                ),
+                React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}},
+                  React.createElement("div",null,
+                    React.createElement("label",{style:{fontSize:10,fontFamily:F.m,color:C.txD,textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"block"}},"CONTACTO"),
+                    React.createElement("input",{value:newProj.contacto,onChange:e=>setNewProj(p=>({...p,contacto:e.target.value})),placeholder:"Nombre del contacto",style:{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 12px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none"}})
+                  ),
+                  React.createElement("div",null,
+                    React.createElement("label",{style:{fontSize:10,fontFamily:F.m,color:C.txD,textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"block"}},"EMPRESA"),
+                    React.createElement("input",{value:newProj.empresa,onChange:e=>setNewProj(p=>({...p,empresa:e.target.value})),placeholder:"Nombre de la empresa",style:{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 12px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none"}})
+                  )
+                ),
+                React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}},
+                  React.createElement("div",null,
+                    React.createElement("label",{style:{fontSize:10,fontFamily:F.m,color:C.txD,textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"block"}},"TELÉFONO"),
+                    React.createElement("input",{value:newProj.telefono,onChange:e=>setNewProj(p=>({...p,telefono:e.target.value})),placeholder:"809-000-0000",style:{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 12px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none"}})
+                  ),
+                  React.createElement("div",null,
+                    React.createElement("label",{style:{fontSize:10,fontFamily:F.m,color:C.txD,textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"block"}},"WHATSAPP"),
+                    React.createElement("input",{value:newProj.whatsapp,onChange:e=>setNewProj(p=>({...p,whatsapp:e.target.value})),placeholder:"18091234567",style:{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 12px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none"}})
+                  ),
+                  React.createElement("div",null,
+                    React.createElement("label",{style:{fontSize:10,fontFamily:F.m,color:C.txD,textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"block"}},"EMAIL"),
+                    React.createElement("input",{type:"email",value:newProj.email,onChange:e=>setNewProj(p=>({...p,email:e.target.value})),placeholder:"email@empresa.com",style:{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 12px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none"}})
+                  )
+                ),
+                React.createElement("div",null,
+                  React.createElement("label",{style:{fontSize:10,fontFamily:F.m,color:C.txD,textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"block"}},"DESCRIPCIÓN / NOTAS"),
+                  React.createElement("textarea",{value:newProj.descripcion,onChange:e=>setNewProj(p=>({...p,descripcion:e.target.value})),placeholder:"Detalles del proyecto, notas, origen de la oportunidad...",rows:3,style:{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 12px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none",resize:"vertical"}})
+                ),
+                React.createElement("div",null,
+                  React.createElement("label",{style:{fontSize:10,fontFamily:F.m,color:C.txD,textTransform:"uppercase",letterSpacing:1,marginBottom:4,display:"block"}},"FUENTE"),
+                  React.createElement("input",{value:newProj.fuente,onChange:e=>setNewProj(p=>({...p,fuente:e.target.value})),placeholder:"Ej: Referido, Feria, Contacto directo...",style:{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 12px",fontSize:13,color:C.tx,fontFamily:F.b,outline:"none"}})
+                ),
+                React.createElement("button",{onClick:addManualProject,style:{background:C.acc,border:"none",borderRadius:10,padding:"12px",fontSize:14,fontWeight:700,color:C.bg,fontFamily:F.m,cursor:"pointer",marginTop:4}},"Agregar al Pipeline")
+              )
+            )
+          ),
+          filtered.map((p,i)=>
+            React.createElement("div",{key:p.id||i,onClick:()=>setSel(p),style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,padding:"16px 20px",display:"flex",alignItems:"center",gap:16,cursor:"pointer",marginBottom:10,animation:`slideIn .3s ease ${i*.04}s both`},onMouseEnter:e=>{e.currentTarget.style.background=C.hover},onMouseLeave:e=>{e.currentTarget.style.background=C.card}},
+              React.createElement(Gauge,{value:p.blastingProbability||0}),
+              React.createElement("div",{style:{flex:1}},
+                React.createElement("div",{style:{display:"flex",gap:8,alignItems:"center",marginBottom:4}},
+                  React.createElement("span",{style:{fontSize:9,fontFamily:F.m,color:pC(p.priority),background:pB(p.priority),padding:"2px 6px",borderRadius:3,textTransform:"uppercase",fontWeight:700}},p.priority),
+                  React.createElement("span",{style:{fontSize:10,color:C.txD,fontFamily:F.m}},p.id)
+                ),
+                React.createElement("div",{style:{fontSize:14,fontWeight:600,color:C.tx,fontFamily:F.b,marginBottom:4}},p.title),
+                React.createElement("div",{style:{display:"flex",gap:8,fontSize:11,color:C.txM,fontFamily:F.m,flexWrap:"wrap",alignItems:"center"}},
+                  React.createElement("span",null,(p.type||"")),
+                  React.createElement("span",null,"·"),
+                  React.createElement("span",null,(p.province||"")),
+                  React.createElement("span",null,"·"),
+                  (p.url_licitacion||p.url_fuente||p.urlFuente)?
+                    React.createElement("a",{href:p.url_licitacion||p.url_fuente||p.urlFuente,target:"_blank",onClick:e=>e.stopPropagation(),rel:"noopener noreferrer",style:{color:C.acc,textDecoration:"none",fontSize:10,fontWeight:600}},p.url_licitacion?"📋 Ver licitación":"🔗 Ver fuente"):
+                    React.createElement("span",null,(p.source||"")),
+                  p.detectedDate&&React.createElement("span",null,"·"),
+                  p.detectedDate&&React.createElement("span",{style:{color:C.md}},"📅 "+p.detectedDate)
+                )
+              ),
+              React.createElement("div",{style:{textAlign:"right",flexShrink:0}},
+                React.createElement("div",{style:{fontSize:16,fontWeight:700,color:C.acc,fontFamily:F.m,marginBottom:4}},fmt(p.estimatedValue||0)),
+                React.createElement("div",{style:{fontSize:10,color:C.txM,fontFamily:F.m,background:C.bg,padding:"3px 8px",borderRadius:4,display:"inline-block"}},sL(p.status))
+              ),
+              React.createElement("a",{href:`https://wa.me/${(p.whatsapp||"").replace(/[^0-9]/g,"")||""}?text=${encodeURIComponent("Buenos días, somos GEOTECHNICAL. Vi el proyecto \""+p.title+"\" y nos gustaría ofrecerles servicios de voladura. ¿Cuándo podemos conversar?")}`,target:"_blank",rel:"noopener noreferrer",onClick:e=>e.stopPropagation(),title:"WhatsApp",style:{background:"#25D366",border:"none",borderRadius:6,padding:"8px 10px",fontSize:13,cursor:"pointer",textDecoration:"none",flexShrink:0,display:"flex",alignItems:"center"}},"📱"),
+              React.createElement("button",{onClick:e=>{e.stopPropagation();if(confirm("¿Eliminar \""+p.title+"\" del pipeline?"))setProjects(prev=>prev.filter(pr=>(pr.id||pr.title)!==(p.id||p.title)))},style:{background:"none",border:"none",color:C.txD,cursor:"pointer",padding:"8px",borderRadius:6,fontSize:14,flexShrink:0,opacity:0.4,transition:"opacity .2s"},onMouseEnter:e=>{e.currentTarget.style.opacity="1";e.currentTarget.style.color=C.cr},onMouseLeave:e=>{e.currentTarget.style.opacity="0.4";e.currentTarget.style.color=C.txD}},"✕")
+            )
+          )
+        ),
+
+        // KANBAN
+        tab==="kanban"&&React.createElement("div",{style:{height:"100%",display:"flex",flexDirection:"column"}},
+          React.createElement("div",{style:{padding:"16px 24px 0",flexShrink:0}},
+            React.createElement("div",{style:{display:"flex",gap:16,alignItems:"center",marginBottom:16}},
+              React.createElement("div",null,
+                React.createElement("div",{style:{fontSize:13,fontWeight:700,fontFamily:F.h,color:C.tx}},"Tracker de Proyectos"),
+                React.createElement("div",{style:{fontSize:11,color:C.txM,fontFamily:F.b,marginTop:2}},"Mueve cada proyecto por las etapas del proceso comercial")
+              ),
+              React.createElement("div",{style:{marginLeft:"auto",display:"flex",gap:8,flexWrap:"wrap"}},
+                KANBAN_COLS.map(col=>React.createElement("div",{key:col.id,style:{display:"flex",alignItems:"center",gap:5}},
+                  React.createElement("div",{style:{width:8,height:8,borderRadius:"50%",background:col.color}}),
+                  React.createElement("span",{style:{fontSize:10,color:C.txM,fontFamily:F.m}},kanbanColProjects(projects,col.id).length+" "+col.label)
+                ))
+              )
+            )
+          ),
+          React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+            React.createElement(KanbanBoard,{projects,onUpdateStatus:updateKanbanStatus,onSelectProject:setSel})
+          )
+        ),
+
+        // SCANNER
+        tab==="scanner"&&React.createElement("div",{style:{animation:"slideIn .3s ease",display:"flex",flexDirection:"column",gap:20}},
+          React.createElement(Scanner,{claudeKey:config.claudeKey,projects:[...projects,...candidates],onNewProjects:handleNewProjects}),
+          
+          // CANDIDATES LIST
+          candidates.length>0&&React.createElement("div",{style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,overflow:"hidden"}},
+            React.createElement("div",{style:{padding:"16px 20px",borderBottom:`1px solid ${C.brd}`,display:"flex",justifyContent:"space-between",alignItems:"center"}},
+              React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10}},
+                React.createElement("span",{style:{fontSize:11,color:C.acc,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,fontWeight:700}},"PROYECTOS DETECTADOS"),
+                React.createElement("span",{style:{fontSize:10,background:C.accG,color:C.acc,padding:"2px 8px",borderRadius:10,fontFamily:F.m,fontWeight:700}},candidates.length)
+              ),
+              React.createElement("div",{style:{display:"flex",gap:8}},
+                React.createElement("button",{onClick:approveAll,style:{background:C.ok,border:"none",borderRadius:6,padding:"6px 14px",fontSize:11,fontWeight:700,color:"#fff",fontFamily:F.m,cursor:"pointer"}},"✓ Guardar Todos"),
+                React.createElement("button",{onClick:()=>setCandidates([]),style:{background:"none",border:`1px solid ${C.brd}`,borderRadius:6,padding:"6px 14px",fontSize:11,color:C.txD,fontFamily:F.m,cursor:"pointer"}},"Descartar Todos")
+              )
+            ),
+            candidates.map((p,i)=>React.createElement("div",{key:p.id||i,style:{padding:"14px 20px",borderBottom:`1px solid ${C.brd}`,display:"flex",alignItems:"center",gap:14,animation:`slideIn .3s ease ${i*.05}s both`}},
+              React.createElement(Gauge,{value:p.blastingProbability||0,size:42}),
+              React.createElement("div",{style:{flex:1,cursor:"pointer"},onClick:()=>setSel(p)},
+                React.createElement("div",{style:{display:"flex",gap:8,alignItems:"center",marginBottom:3}},
+                  React.createElement("span",{style:{fontSize:9,fontFamily:F.m,color:pC(p.priority),background:pB(p.priority),padding:"2px 6px",borderRadius:3,textTransform:"uppercase",fontWeight:700}},p.priority),
+                  React.createElement("span",{style:{fontSize:10,color:C.txD,fontFamily:F.m}},p.id)
+                ),
+                React.createElement("div",{style:{fontSize:13,fontWeight:600,color:C.tx,fontFamily:F.b,marginBottom:3}},p.title),
+                React.createElement("div",{style:{fontSize:11,color:C.txM,fontFamily:F.m}},(p.type||"")+" · "+(p.province||"")+" · "+(p.source||"")+(p.detectedDate?" · 📅 "+p.detectedDate:""))
+              ),
+              React.createElement("div",{style:{textAlign:"right",flexShrink:0,marginRight:8}},
+                React.createElement("div",{style:{fontSize:14,fontWeight:700,color:C.acc,fontFamily:F.m}},fmt(p.estimatedValue||0))
+              ),
+              React.createElement("div",{style:{display:"flex",gap:6,flexShrink:0}},
+                React.createElement("button",{onClick:()=>approveProject(p),title:"Guardar al Pipeline",style:{background:C.okBg,border:`1px solid ${C.ok}44`,borderRadius:6,padding:"8px 12px",fontSize:12,color:C.ok,cursor:"pointer",fontWeight:700}},"✓"),
+                React.createElement("button",{onClick:()=>dismissCandidate(p),title:"Descartar",style:{background:C.crBg,border:`1px solid ${C.cr}44`,borderRadius:6,padding:"8px 12px",fontSize:12,color:C.cr,cursor:"pointer",fontWeight:700}},"✕")
+              )
+            ))
+          )
+        ),
+
+
+        // AI
+        tab==="adjudicadas"&&React.createElement(Adjudicadas,{claudeKey:config.claudeKey}),
+        tab==="ai"&&React.createElement("div",{style:{height:"100%"}},React.createElement(AIChat,{projects,claudeKey:config.claudeKey})),
+
+        // SETTINGS
+        tab==="settings"&&React.createElement("div",{style:{animation:"slideIn .3s ease",maxWidth:600}},
+          React.createElement("div",{style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,padding:24,marginBottom:16}},
+            React.createElement("h3",{style:{fontSize:14,fontWeight:700,fontFamily:F.h,color:C.tx,marginBottom:4}},"Claude AI"),
+            React.createElement("p",{style:{fontSize:12,color:C.txM,fontFamily:F.b,marginBottom:16}},"Necesaria para el Escáner de noticias y el AI Analyst"),
+            React.createElement("div",{style:{marginBottom:16}},
+              React.createElement("label",{style:{display:"block",fontSize:11,color:C.txD,fontFamily:F.m,letterSpacing:1,marginBottom:6}},"CLAUDE API KEY"),
+              React.createElement("input",{type:"password",value:config.claudeKey,onChange:e=>setConfig(c=>({...c,claudeKey:e.target.value})),placeholder:"sk-ant-...",style:{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 14px",fontSize:13,color:C.tx,fontFamily:F.m,outline:"none"}})
+            ),
+            React.createElement("div",{style:{padding:12,background:config.claudeKey?C.okBg:C.bg,border:`1px solid ${config.claudeKey?C.ok+"33":C.brd}`,borderRadius:8}},
+              React.createElement("div",{style:{fontSize:12,color:config.claudeKey?C.ok:C.txD,fontFamily:F.m,fontWeight:600}},config.claudeKey?"✓ Claude configurado — Escáner y AI Analyst listos":"Obtén tu key en console.anthropic.com")
+            )
+          ),
+          React.createElement("div",{style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,padding:24,marginBottom:16}},
+            React.createElement("h3",{style:{fontSize:14,fontWeight:700,fontFamily:F.h,color:C.tx,marginBottom:4}},"Backup de Datos"),
+            React.createElement("p",{style:{fontSize:12,color:C.txM,fontFamily:F.b,marginBottom:16}},"Exporta o importa todos tus proyectos para no perder nada"),
+            React.createElement("div",{style:{display:"flex",gap:12}},
+              React.createElement("button",{onClick:exportBackup,style:{flex:1,background:C.okBg,border:`1px solid ${C.ok}44`,borderRadius:8,padding:"12px",fontSize:12,fontWeight:700,color:C.ok,fontFamily:F.m,cursor:"pointer"}},"📥 Exportar Backup"),
+              React.createElement("label",{style:{flex:1,background:C.accG,border:`1px solid ${C.acc}44`,borderRadius:8,padding:"12px",fontSize:12,fontWeight:700,color:C.acc,fontFamily:F.m,cursor:"pointer",textAlign:"center"}},
+                "📤 Importar Backup",
+                React.createElement("input",{type:"file",accept:".json",onChange:importBackup,style:{display:"none"}})
+              )
+            ),
+            React.createElement("div",{style:{marginTop:12,padding:10,background:C.bg,borderRadius:6,border:`1px solid ${C.brd}`}},
+              React.createElement("div",{style:{fontSize:11,color:C.txM,fontFamily:F.b}},"💾 "+projects.length+" proyectos en tu pipeline · Último guardado: "+new Date().toLocaleDateString("es-DO"))
+            )
+          ),
+          React.createElement("div",{style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,padding:24}},
+            React.createElement("h3",{style:{fontSize:14,fontWeight:700,fontFamily:F.h,color:C.tx,marginBottom:16}},"¿Cómo funciona?"),
+            [{s:"1",t:"Pega tu API Key arriba",d:"Obtén tu key en console.anthropic.com"},{s:"2",t:"Ve al tab Escáner",d:"Click en Escanear Ahora para consultar el portal DGCP"},{s:"3",t:"Jala licitaciones reales",d:"Descarga 300 licitaciones oficiales del Estado dominicano"},{s:"4",t:"Claude filtra y analiza",d:"Detecta cuáles necesitan explosivos y les asigna probabilidad"},{s:"5",t:"Aprueba y mueve al pipeline",d:"Las licitaciones aprobadas entran al Kanban automáticamente"}].map((s,i)=>
+              React.createElement("div",{key:i,style:{display:"flex",gap:14,padding:"10px 0",borderBottom:i<4?`1px solid ${C.brd}`:"none"}},
+                React.createElement("div",{style:{width:28,height:28,borderRadius:"50%",background:C.accG,border:`1px solid ${C.acc}33`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:C.acc,fontFamily:F.m,flexShrink:0}},s.s),
+                React.createElement("div",null,
+                  React.createElement("div",{style:{fontSize:13,fontWeight:600,color:C.tx,fontFamily:F.b}},s.t),
+                  React.createElement("div",{style:{fontSize:11,color:C.txM,fontFamily:F.b,marginTop:2}},s.d)
+                )
+              )
+            )
+          )
+        )
+      )
+    ),
+    React.createElement(Modal,{project:sel,onClose:()=>setSel(null),onAddNote:addNote,onUpdateProject:updateProject})
+  );
+}
+
+ReactDOM.render(React.createElement(ErrorBoundary,null,React.createElement(App)),document.getElementById("root"));
+</script>
+</body>
+</html>

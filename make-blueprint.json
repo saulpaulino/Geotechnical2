@@ -1,0 +1,186 @@
+{
+  "name": "Geotechnical Market Scanner — Auto 4h",
+  "flow": [
+    {
+      "id": 1,
+      "module": "builtin:BasicScheduleTrigger",
+      "version": 1,
+      "parameters": {
+        "interval": 240
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": { "x": 0, "y": 0 },
+        "restore": {}
+      }
+    },
+    {
+      "id": 2,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+      },
+      "mapper": {
+        "url": "https://yellow-paper-dc25.saulpaulino8.workers.dev",
+        "serializeUrl": false,
+        "method": "post",
+        "headers": [
+          { "name": "Content-Type", "value": "application/json" }
+        ],
+        "qs": [],
+        "bodyType": "raw",
+        "parseResponse": true,
+        "contentType": "application/json",
+        "data": "{\"apiKey\":\"{{1.CLAUDE_API_KEY}}\",\"model\":\"claude-sonnet-4-20250514\",\"max_tokens\":4000,\"tools\":[{\"type\":\"web_search_20250305\",\"name\":\"web_search\"}],\"messages\":[{\"role\":\"user\",\"content\":\"Busca noticias recientes sobre proyectos de infraestructura en República Dominicana que podrían requerir servicios de explosivos comerciales (voladuras, excavación en roca, canteras, túneles, presas, carreteras con cortes de montaña, minería). Para cada proyecto relevante, genera un objeto JSON. Responde SOLO con un array JSON puro sin markdown ni backticks. Formato de cada objeto: {\\\"id\\\":\\\"PRJ-2026-XXX\\\",\\\"titulo\\\":\\\"nombre\\\",\\\"fuente\\\":\\\"fuente\\\",\\\"tipo\\\":\\\"Carreteras|Hidroeléctrica|Metro/Túnel|Minería|Industrial|Portuario|Otro\\\",\\\"region\\\":\\\"Norte|Sur|Este|Oeste|DN|Noroeste\\\",\\\"provincia\\\":\\\"nombre\\\",\\\"valor_estimado\\\":0,\\\"prob_voladura\\\":85,\\\"fecha_deteccion\\\":\\\"2026-03-25\\\",\\\"inicio_estimado\\\":\\\"2026-XX\\\",\\\"status\\\":\\\"detectado\\\",\\\"descripcion\\\":\\\"descripción breve\\\",\\\"señales\\\":\\\"señal1; señal2\\\",\\\"competidores\\\":\\\"comp1; comp2\\\",\\\"ai_insight\\\":\\\"recomendación estratégica\\\",\\\"prioridad\\\":\\\"critical|high|medium|low\\\",\\\"contacto\\\":\\\"entidad responsable\\\",\\\"url_fuente\\\":\\\"url si disponible\\\"}. IMPORTANTE: Solo proyectos que genuinamente necesitan explosivos. Si no hay noticias relevantes responde: []\"}]}"
+      },
+      "metadata": {
+        "designer": { "x": 300, "y": 0 },
+        "restore": {}
+      }
+    },
+    {
+      "id": 3,
+      "module": "builtin:BasicFilter",
+      "version": 1,
+      "parameters": {},
+      "filter": {
+        "name": "Solo si hay proyectos",
+        "conditions": [
+          [
+            {
+              "a": "{{2.data.content}}",
+              "b": "[]",
+              "o": "text:notequal"
+            }
+          ]
+        ]
+      },
+      "metadata": {
+        "designer": { "x": 600, "y": 0 }
+      }
+    },
+    {
+      "id": 4,
+      "module": "util:FunctionSetVariables",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "variables": [
+          {
+            "name": "raw_text",
+            "value": "{{join(map(2.data.content; \"text\"; \"type\"; \"text\"); \"\")}}"
+          },
+          {
+            "name": "today",
+            "value": "{{formatDate(now; \"YYYY-MM-DD\")}}"
+          }
+        ]
+      },
+      "metadata": {
+        "designer": { "x": 900, "y": 0 }
+      }
+    },
+    {
+      "id": 5,
+      "module": "json:ParseJSON",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "json": "{{replace(replace(4.raw_text; /```json\\n?/g; \"\"); /```\\n?/g; \"\")}}"
+      },
+      "metadata": {
+        "designer": { "x": 1200, "y": 0 }
+      }
+    },
+    {
+      "id": 6,
+      "module": "tools:Iterator",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "array": "{{5.array}}"
+      },
+      "metadata": {
+        "designer": { "x": 1500, "y": 0 }
+      }
+    },
+    {
+      "id": 7,
+      "module": "google-sheets:ActionAddRow",
+      "version": 2,
+      "parameters": {
+        "spreadsheetId": "TU_SPREADSHEET_ID_AQUI",
+        "sheetId": "Pipeline",
+        "__IMTCONN__": "TU_GOOGLE_CONNECTION_ID"
+      },
+      "mapper": {
+        "from": "select",
+        "values": {
+          "A": "{{6.value.id}}",
+          "B": "{{6.value.titulo}}",
+          "C": "{{6.value.fuente}}",
+          "D": "{{6.value.tipo}}",
+          "E": "{{6.value.region}}",
+          "F": "{{6.value.provincia}}",
+          "G": "{{6.value.valor_estimado}}",
+          "H": "{{6.value.prob_voladura}}",
+          "I": "{{6.value.fecha_deteccion}}",
+          "J": "{{6.value.inicio_estimado}}",
+          "K": "{{6.value.status}}",
+          "L": "{{6.value.descripcion}}",
+          "M": "{{6.value.señales}}",
+          "N": "{{6.value.competidores}}",
+          "O": "{{6.value.ai_insight}}",
+          "P": "{{6.value.prioridad}}",
+          "Q": "{{6.value.contacto}}",
+          "R": "{{6.value.url_fuente}}",
+          "S": "{{formatDate(now; \"YYYY-MM-DDTHH:mm:ss\")}}"
+        },
+        "insertDataOption": "INSERT_ROWS",
+        "valueInputOption": "USER_ENTERED",
+        "includesHeaders": true
+      },
+      "metadata": {
+        "designer": { "x": 1800, "y": 0 }
+      }
+    },
+    {
+      "id": 8,
+      "module": "util:FunctionSetVariables",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "variables": [
+          {
+            "name": "log",
+            "value": "✅ Geotechnical Scanner: {{6.value.titulo}} agregado al Pipeline ({{6.value.tipo}} · {{6.value.provincia}} · Voladura: {{6.value.prob_voladura}}%)"
+          }
+        ]
+      },
+      "metadata": {
+        "designer": { "x": 2100, "y": 0 }
+      }
+    }
+  ],
+  "metadata": {
+    "instant": false,
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "autoCommitTriggerLast": true,
+      "sequential": false,
+      "confidential": false,
+      "dataloss": false,
+      "dlq": false,
+      "freshVariables": false
+    },
+    "designer": {
+      "orphans": []
+    },
+    "zone": "us1.make.com"
+  }
+}
