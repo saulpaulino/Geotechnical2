@@ -120,6 +120,19 @@ function kanbanColProjects(projects,colId){
 // ===== DGCP SCANNER — Claude web_search =====
 const PROXY_URL="https://yellow-paper-dc25.saulpaulino8.workers.dev";
 
+const api = {
+  base: "https://yellow-paper-dc25.saulpaulino8.workers.dev",
+  async call(path, method="GET", body=null) {
+    const token = sessionStorage.getItem("geotechnical_token");
+    const opts = { method, headers: {"Content-Type":"application/json"} };
+    if (token) opts.headers["Authorization"] = "Bearer " + token;
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(this.base + path, opts);
+    if (res.status === 401) { sessionStorage.removeItem("geotechnical_token"); sessionStorage.removeItem("geotechnical_user"); window.location.reload(); }
+    return res.json();
+  }
+};
+
 async function claudeCall(claudeKey, prompt, useWebSearch=true){
   const body={apiKey:claudeKey,model:"claude-sonnet-4-20250514",max_tokens:4096,messages:[{role:"user",content:prompt}]};
   if(useWebSearch)body.tools=[{type:"web_search_20250305",name:"web_search",max_uses:3}];
@@ -245,15 +258,46 @@ function Bars({data,dk,color,h=80}){
   );
 }
 
-function Modal({project:p,onClose,onAddNote,onUpdateProject}){
+function Modal({project:p,onClose,onAddNote,onUpdateProject,authToken}){
   if(!p)return null;
   const[noteText,setNoteText]=useState("");
+  const[activityType,setActivityType]=useState("note");
+  const[activities,setActivities]=useState([]);
   const[editContact,setEditContact]=useState(false);
   const[ci,setCi]=useState({nombre:p.contactLead||"",telefono:p.telefono||"",whatsapp:p.whatsapp||"",email:p.email||"",empresa:p.empresa||""});
   const[reminderDate,setReminderDate]=useState(p.reminder||"");
   const[reminderNote,setReminderNote]=useState(p.reminderNote||"");
 
-  const handleAddNote=()=>{if(noteText.trim()&&onAddNote){onAddNote(p.id||p.title,noteText);setNoteText("");}};
+  const ACTIVITY_TYPES=[
+    {id:"call",icon:"\uD83D\uDCDE",label:"Llamada"},
+    {id:"email",icon:"\uD83D\uDCE7",label:"Email"},
+    {id:"meeting",icon:"\uD83E\uDD1D",label:"Reunión"},
+    {id:"quote",icon:"\uD83D\uDCC4",label:"Cotización"},
+    {id:"note",icon:"\uD83D\uDCDD",label:"Nota"}
+  ];
+
+  // Load activities from API on open
+  useEffect(()=>{
+    if(!authToken||!p.id)return;
+    api.call("/api/projects/"+p.id+"/activities").then(data=>{
+      if(data.activities)setActivities(data.activities);
+    }).catch(()=>{});
+  },[p.id,authToken]);
+
+  const handleAddNote=()=>{
+    if(!noteText.trim())return;
+    if(onAddNote)onAddNote(p.id||p.title,noteText);
+    // Also post to API with type
+    if(authToken&&p.id){
+      api.call("/api/projects/"+p.id+"/activities","POST",{type:activityType,text:noteText}).then(data=>{
+        if(data.id){
+          const newAct={id:data.id,type:activityType,text:noteText,user_name:JSON.parse(sessionStorage.getItem("geotechnical_user")||"{}").name||"Tú",created_at:new Date().toISOString()};
+          setActivities(prev=>[newAct,...prev]);
+        }
+      }).catch(()=>{});
+    }
+    setNoteText("");
+  };
   const saveContact=()=>{if(onUpdateProject){onUpdateProject(p.id||p.title,{contactLead:ci.nombre,telefono:ci.telefono,whatsapp:ci.whatsapp,email:ci.email,empresa:ci.empresa});setEditContact(false);}};
   const saveReminder=()=>{if(onUpdateProject&&reminderDate){onUpdateProject(p.id||p.title,{reminder:reminderDate,reminderNote,reminderShown:false});alert("Recordatorio guardado para "+reminderDate);}};
   const waMsg=encodeURIComponent(`Buenos días, somos GEOTECHNICAL — empresa de explosivos y voladuras en RD. Vimos el proyecto "${p.title}" y nos gustaría ofrecerles nuestros servicios de voladura y suministro de explosivos. ¿Cuándo podemos conversar?`);
@@ -500,19 +544,36 @@ function Modal({project:p,onClose,onAddNote,onUpdateProject}){
           p.reminder&&React.createElement("div",{style:{fontSize:11,color:C.ok,fontFamily:F.m,marginTop:8}},"📅 Recordatorio activo: "+p.reminder+(p.reminderNote?" — "+p.reminderNote:""))
         ),
 
-        // NOTES
+        // ACTIVITY TIMELINE
         React.createElement("div",{style:{background:C.bg,border:`1px solid ${C.brd}`,borderRadius:10,padding:16,marginBottom:20}},
-          React.createElement("div",{style:{fontSize:11,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:10}},"📝 NOTAS DE SEGUIMIENTO"),
+          React.createElement("div",{style:{fontSize:11,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:10}},"HISTORIAL DE ACTIVIDADES"),
+          // Type selector
+          React.createElement("div",{style:{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}},
+            ACTIVITY_TYPES.map(at=>React.createElement("button",{key:at.id,onClick:()=>setActivityType(at.id),style:{background:activityType===at.id?C.accG:"transparent",border:"1px solid "+(activityType===at.id?C.acc+"44":C.brd),borderRadius:6,padding:"5px 10px",fontSize:10,color:activityType===at.id?C.acc:C.txM,fontFamily:F.m,cursor:"pointer",display:"flex",alignItems:"center",gap:4}},at.icon+" "+at.label))
+          ),
           React.createElement("div",{style:{display:"flex",gap:8,marginBottom:12}},
             React.createElement("input",{value:noteText,onChange:e=>setNoteText(e.target.value),onKeyDown:e=>{if(e.key==="Enter")handleAddNote();},placeholder:"Ej: Hablé con fulano, me dijo que arrancan en mayo...",style:{flex:1,background:C.card,border:`1px solid ${C.brd}`,borderRadius:6,padding:"8px 10px",fontSize:12,color:C.tx,fontFamily:F.b,outline:"none"}}),
             React.createElement("button",{onClick:handleAddNote,style:{background:C.acc,border:"none",borderRadius:6,padding:"8px 14px",fontSize:11,fontWeight:700,color:C.bg,fontFamily:F.m,cursor:"pointer"}},"Agregar")
           ),
-          (p.notes||[]).length===0?
-            React.createElement("div",{style:{fontSize:12,color:C.txD,fontFamily:F.b,textAlign:"center",padding:12}},"Sin notas aún. Agrega la primera nota de seguimiento."):
-            (p.notes||[]).map(n=>React.createElement("div",{key:n.id,style:{padding:"10px 12px",background:C.card,borderRadius:6,marginBottom:6,borderLeft:`3px solid ${C.acc}`}},
-              React.createElement("div",{style:{fontSize:12,color:C.tx,fontFamily:F.b,lineHeight:1.5}},n.text),
-              React.createElement("div",{style:{fontSize:10,color:C.txD,fontFamily:F.m,marginTop:4}},n.date)
-            ))
+          // Timeline from API
+          (()=>{
+            const allItems=[...activities.map(a=>({id:a.id,type:a.type||"note",text:a.text,user:a.user_name||"",date:a.created_at?new Date(a.created_at).toLocaleString("es-DO",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}):"",ts:a.created_at?new Date(a.created_at).getTime():0})),...(p.notes||[]).map(n=>({id:n.id,type:"note",text:n.text,user:"",date:n.date,ts:n.id||0}))];
+            // Deduplicate by text (rough)
+            const seen=new Set();
+            const unique=allItems.filter(a=>{const k=a.text+(a.type||"");if(seen.has(k))return false;seen.add(k);return true;}).sort((a,b)=>(b.ts||0)-(a.ts||0));
+            const typeIcon={call:"\uD83D\uDCDE",email:"\uD83D\uDCE7",meeting:"\uD83E\uDD1D",quote:"\uD83D\uDCC4",note:"\uD83D\uDCDD"};
+            if(unique.length===0)return React.createElement("div",{style:{fontSize:12,color:C.txD,fontFamily:F.b,textAlign:"center",padding:12}},"Sin actividades aún. Agrega la primera.");
+            return unique.map(a=>React.createElement("div",{key:a.id,style:{display:"flex",gap:10,padding:"10px 0",borderBottom:"1px solid "+C.brd+"33"}},
+              React.createElement("div",{style:{width:28,height:28,borderRadius:"50%",background:C.accG,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,flexShrink:0}},typeIcon[a.type]||"\uD83D\uDCDD"),
+              React.createElement("div",{style:{flex:1}},
+                React.createElement("div",{style:{fontSize:12,color:C.tx,fontFamily:F.b,lineHeight:1.5}},a.text),
+                React.createElement("div",{style:{fontSize:10,color:C.txD,fontFamily:F.m,marginTop:3,display:"flex",gap:8}},
+                  a.user&&React.createElement("span",null,a.user),
+                  React.createElement("span",null,a.date)
+                )
+              )
+            ));
+          })()
         ),
 
         // COMPETITION
@@ -682,6 +743,62 @@ function AIChat({projects,claudeKey}){
   );
 }
 
+// ===== LOGIN SCREEN =====
+function LoginScreen({onLogin}){
+  const[mode,setMode]=useState("login");
+  const[email,setEmail]=useState("");
+  const[password,setPassword]=useState("");
+  const[name,setName]=useState("");
+  const[error,setError]=useState("");
+  const[loading,setLoading]=useState(false);
+
+  const handleSubmit=async()=>{
+    if(!email||!password||(mode==="register"&&!name)){setError("Completa todos los campos");return;}
+    setLoading(true);setError("");
+    try{
+      const path=mode==="login"?"/api/login":"/api/register";
+      const body=mode==="login"?{email,password}:{email,password,name};
+      const res=await fetch(api.base+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      const data=await res.json();
+      if(!res.ok||data.error)throw new Error(data.error||"Error de autenticación");
+      sessionStorage.setItem("geotechnical_token",data.token);
+      sessionStorage.setItem("geotechnical_user",JSON.stringify(data.user));
+      onLogin(data.token,data.user);
+    }catch(e){setError(e.message);}
+    setLoading(false);
+  };
+
+  return React.createElement("div",{style:{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:DARK_C.bg,fontFamily:F.b}},
+    React.createElement("div",{style:{width:380,background:DARK_C.card,border:"1px solid "+DARK_C.brd,borderRadius:16,overflow:"hidden"}},
+      React.createElement("div",{style:{padding:"28px 32px 20px",textAlign:"center",borderBottom:"1px solid "+DARK_C.brd}},
+        React.createElement("div",{style:{fontSize:28,marginBottom:8}},"💣"),
+        React.createElement("div",{style:{fontSize:16,fontWeight:700,fontFamily:F.h,color:DARK_C.tx}},"GEOTECHNICAL"),
+        React.createElement("div",{style:{fontSize:10,color:"#2C6E6A",fontFamily:F.m,letterSpacing:2,fontWeight:600,marginTop:4}},"MARKET INTEL v3")
+      ),
+      React.createElement("div",{style:{display:"flex",borderBottom:"1px solid "+DARK_C.brd}},
+        React.createElement("button",{onClick:()=>{setMode("login");setError("");},style:{flex:1,padding:"12px",background:mode==="login"?DARK_C.accG:"transparent",border:"none",borderBottom:mode==="login"?"2px solid "+DARK_C.acc:"2px solid transparent",color:mode==="login"?DARK_C.acc:DARK_C.txM,fontSize:12,fontWeight:700,fontFamily:F.m,cursor:"pointer"}},"INICIAR SESIÓN"),
+        React.createElement("button",{onClick:()=>{setMode("register");setError("");},style:{flex:1,padding:"12px",background:mode==="register"?DARK_C.accG:"transparent",border:"none",borderBottom:mode==="register"?"2px solid "+DARK_C.acc:"2px solid transparent",color:mode==="register"?DARK_C.acc:DARK_C.txM,fontSize:12,fontWeight:700,fontFamily:F.m,cursor:"pointer"}},"REGISTRO")
+      ),
+      React.createElement("div",{style:{padding:"24px 32px",display:"flex",flexDirection:"column",gap:14}},
+        mode==="register"&&React.createElement("div",null,
+          React.createElement("label",{style:{display:"block",fontSize:10,fontFamily:F.m,color:DARK_C.txD,letterSpacing:1,marginBottom:6}},"NOMBRE"),
+          React.createElement("input",{value:name,onChange:e=>setName(e.target.value),placeholder:"Tu nombre",style:{width:"100%",boxSizing:"border-box",background:DARK_C.bg,border:"1px solid "+DARK_C.brd,borderRadius:8,padding:"10px 14px",fontSize:13,color:DARK_C.tx,fontFamily:F.b,outline:"none"}})
+        ),
+        React.createElement("div",null,
+          React.createElement("label",{style:{display:"block",fontSize:10,fontFamily:F.m,color:DARK_C.txD,letterSpacing:1,marginBottom:6}},"EMAIL"),
+          React.createElement("input",{type:"email",value:email,onChange:e=>setEmail(e.target.value),placeholder:"email@empresa.com",onKeyDown:e=>e.key==="Enter"&&handleSubmit(),style:{width:"100%",boxSizing:"border-box",background:DARK_C.bg,border:"1px solid "+DARK_C.brd,borderRadius:8,padding:"10px 14px",fontSize:13,color:DARK_C.tx,fontFamily:F.b,outline:"none"}})
+        ),
+        React.createElement("div",null,
+          React.createElement("label",{style:{display:"block",fontSize:10,fontFamily:F.m,color:DARK_C.txD,letterSpacing:1,marginBottom:6}},"CONTRASEÑA"),
+          React.createElement("input",{type:"password",value:password,onChange:e=>setPassword(e.target.value),placeholder:"••••••••",onKeyDown:e=>e.key==="Enter"&&handleSubmit(),style:{width:"100%",boxSizing:"border-box",background:DARK_C.bg,border:"1px solid "+DARK_C.brd,borderRadius:8,padding:"10px 14px",fontSize:13,color:DARK_C.tx,fontFamily:F.b,outline:"none"}})
+        ),
+        error&&React.createElement("div",{style:{background:"#ef444422",border:"1px solid #ef4444",borderRadius:8,padding:"8px 12px",fontSize:12,color:"#ef4444",fontFamily:F.b}},error),
+        React.createElement("button",{onClick:handleSubmit,disabled:loading,style:{background:loading?DARK_C.brd:DARK_C.acc,border:"none",borderRadius:10,padding:"12px",fontSize:14,fontWeight:700,color:DARK_C.bg,fontFamily:F.m,cursor:loading?"wait":"pointer",marginTop:4}},loading?"Cargando...":mode==="login"?"Entrar":"Crear Cuenta")
+      )
+    )
+  );
+}
+
 // ===== MAIN APP =====
 // ===== KANBAN BOARD =====
 const KANBAN_COLS=[
@@ -695,10 +812,35 @@ const KANBAN_COLS=[
 
 function KanbanBoard({projects,onUpdateStatus,onSelectProject}){
   const colProjects=id=>kanbanColProjects(projects,id);
+  const[dragOverCol,setDragOverCol]=useState(null);
+
+  const handleDragStart=(e,project)=>{
+    e.dataTransfer.setData("text/plain",project.id||project.title);
+    e.dataTransfer.effectAllowed="move";
+  };
+  const handleDragOver=(e,colId)=>{
+    e.preventDefault();
+    e.dataTransfer.dropEffect="move";
+    setDragOverCol(colId);
+  };
+  const handleDragLeave=(e,colId)=>{
+    if(!e.currentTarget.contains(e.relatedTarget))setDragOverCol(null);
+  };
+  const handleDrop=(e,colId)=>{
+    e.preventDefault();
+    setDragOverCol(null);
+    const projectId=e.dataTransfer.getData("text/plain");
+    const project=projects.find(p=>(p.id||p.title)===projectId);
+    if(project)onUpdateStatus(project,colId);
+  };
 
   return React.createElement("div",{style:{display:"flex",gap:12,height:"100%",overflow:"auto",padding:"0 24px 24px"}},
     KANBAN_COLS.map(col=>
-      React.createElement("div",{key:col.id,style:{minWidth:220,flex:1,display:"flex",flexDirection:"column",gap:8}},
+      React.createElement("div",{key:col.id,
+        onDragOver:e=>handleDragOver(e,col.id),
+        onDragLeave:e=>handleDragLeave(e,col.id),
+        onDrop:e=>handleDrop(e,col.id),
+        style:{minWidth:220,flex:1,display:"flex",flexDirection:"column",gap:8,background:dragOverCol===col.id?col.color+"11":"transparent",borderRadius:12,transition:"background .2s",padding:dragOverCol===col.id?4:0}},
         // Column header
         React.createElement("div",{style:{padding:"10px 14px",borderRadius:10,background:C.card,border:`1px solid ${col.color}44`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}},
           React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6}},
@@ -712,7 +854,7 @@ function KanbanBoard({projects,onUpdateStatus,onSelectProject}){
           colProjects(col.id).length===0&&
             React.createElement("div",{style:{padding:"20px 12px",textAlign:"center",color:C.txD,fontSize:11,fontFamily:F.b,border:`1px dashed ${C.brd}`,borderRadius:10}},"Sin proyectos"),
           colProjects(col.id).map((p,i)=>
-            React.createElement("div",{key:p.id||i,style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:10,padding:"12px 14px",cursor:"pointer",animation:`slideIn .2s ease ${i*.05}s both`},
+            React.createElement("div",{key:p.id||i,draggable:"true",onDragStart:e=>handleDragStart(e,p),style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:10,padding:"12px 14px",cursor:"grab",animation:`slideIn .2s ease ${i*.05}s both`},
               onMouseEnter:e=>e.currentTarget.style.borderColor=col.color+"66",
               onMouseLeave:e=>e.currentTarget.style.borderColor=C.brd},
               // Card header
@@ -853,6 +995,21 @@ function Adjudicadas({claudeKey}){
 }
 
 function App(){
+  const[authToken,setAuthToken]=useState(sessionStorage.getItem("geotechnical_token")||"");
+  const[currentUser,setCurrentUser]=useState(JSON.parse(sessionStorage.getItem("geotechnical_user")||"null"));
+
+  const handleLogin=useCallback((token,user)=>{
+    setAuthToken(token);
+    setCurrentUser(user);
+  },[]);
+
+  const handleLogout=useCallback(()=>{
+    sessionStorage.removeItem("geotechnical_token");
+    sessionStorage.removeItem("geotechnical_user");
+    setAuthToken("");
+    setCurrentUser(null);
+  },[]);
+
   const[darkMode,setDarkMode]=useState(()=>{try{return localStorage.getItem('geoTheme')!=='light'}catch(e){return true}});
   Object.assign(C,darkMode?DARK_C:LIGHT_C);
   useEffect(()=>{try{localStorage.setItem('geoTheme',darkMode?'dark':'light')}catch(e){}; document.body.classList.toggle('light-mode',!darkMode);},[darkMode]);
@@ -863,7 +1020,8 @@ function App(){
   const[showAddForm,setShowAddForm]=useState(false);
   const[newProj,setNewProj]=useState({titulo:"",tipo:"Carreteras",region:"Norte",provincia:"",valor:0,prob:70,descripcion:"",contacto:"",telefono:"",whatsapp:"",email:"",empresa:"",fuente:"Manual"});
   const[sidebarOpen,setSidebarOpen]=useState(false);
-  const[historical]=useState(DEFAULT_HISTORICAL);
+  const[historical,setHistorical]=useState(DEFAULT_HISTORICAL);
+  const[dashStats,setDashStats]=useState(null);
   const savedConfig=useRef(null);
   if(!savedConfig.current){
     try{
@@ -888,10 +1046,42 @@ function App(){
   }
   const[projects,setProjects]=useState(savedProjects.current||[]);
   
-  // Save pipeline whenever it changes
+  // Save pipeline whenever it changes (localStorage + API)
+  const projectsSyncedRef=useRef(false);
   useEffect(()=>{
     try{window.localStorage.setItem("geotechnical_pipeline",JSON.stringify(projects));}catch(e){}
   },[projects]);
+
+  // Load projects from API on auth, sync localStorage if needed
+  useEffect(()=>{
+    if(!authToken||projectsSyncedRef.current)return;
+    projectsSyncedRef.current=true;
+    (async()=>{
+      try{
+        const data=await api.call("/api/projects");
+        const remoteProjects=(data.projects||[]).map(normalizeProject);
+        const localProjects=projects;
+        if(remoteProjects.length===0&&localProjects.length>0){
+          if(confirm("Tienes "+localProjects.length+" proyectos locales pero ninguno en la nube. ¿Sincronizar al servidor?")){
+            await api.call("/api/sync","POST",{projects:localProjects});
+          }
+        } else if(remoteProjects.length>0){
+          setProjects(remoteProjects);
+        }
+      }catch(e){console.log("API project load failed, using localStorage:",e);}
+    })();
+  },[authToken]);
+
+  // Load dashboard stats from API
+  useEffect(()=>{
+    if(!authToken)return;
+    (async()=>{
+      try{
+        const data=await api.call("/api/stats");
+        if(data&&!data.error)setDashStats(data);
+      }catch(e){console.log("Stats load failed:",e);}
+    })();
+  },[authToken,projects]);
 
   // CANDIDATES = temporary results from scanner (not saved)
   const[candidates,setCandidates]=useState([]);
@@ -909,11 +1099,12 @@ function App(){
     }
   },[projects,candidates]);
 
-  // Approve candidate → move to pipeline (saved)
+  // Approve candidate → move to pipeline (saved + API)
   const approveProject=useCallback((project)=>{
     setProjects(prev=>[project,...prev]);
     setCandidates(prev=>prev.filter(c=>(c.id||c.title)!==(project.id||project.title)));
-  },[]);
+    if(authToken)api.call("/api/projects","POST",project).catch(e=>console.log("API save failed:",e));
+  },[authToken]);
 
   // Dismiss candidate
   const dismissCandidate=useCallback((project)=>{
@@ -947,7 +1138,8 @@ function App(){
 
   const updateKanbanStatus=useCallback((project,newStatus)=>{
     setProjects(prev=>prev.map(p=>(p.id||p.title)===(project.id||project.title)?{...p,kanbanStatus:newStatus}:p));
-  },[]);
+    if(authToken)api.call("/api/projects/"+(project.id||project.title),"PUT",{kanbanStatus:newStatus}).catch(e=>console.log("API update failed:",e));
+  },[authToken]);
 
   const exportToExcel=useCallback(()=>{
     if(!projects.length){alert("No hay proyectos en el pipeline.");return;}
@@ -992,16 +1184,18 @@ function App(){
       signals:[],competitors:[],aiInsight:"Proyecto agregado manualmente",notes:[]
     };
     setProjects(prev=>[p,...prev]);
+    if(authToken)api.call("/api/projects","POST",p).catch(e=>console.log("API save failed:",e));
     setNewProj({titulo:"",tipo:"Carreteras",region:"Norte",provincia:"",valor:0,prob:70,descripcion:"",contacto:"",telefono:"",whatsapp:"",email:"",empresa:"",fuente:"Manual"});
     setShowAddForm(false);
-  },[newProj]);
+  },[newProj,authToken]);
 
   // Update any project field
   const updateProject=useCallback((projectId,updates)=>{
     setProjects(prev=>prev.map(p=>(p.id||p.title)===(projectId)?{...p,...updates}:p));
     // Also update sel if viewing
     setSel(prev=>prev&&(prev.id||prev.title)===projectId?{...prev,...updates}:prev);
-  },[]);
+    if(authToken)api.call("/api/projects/"+projectId,"PUT",updates).catch(e=>console.log("API update failed:",e));
+  },[authToken]);
 
   // Add note to project
   const addNote=useCallback((projectId,text)=>{
@@ -1051,6 +1245,8 @@ function App(){
   },[projects]);
 
   const hr=(e,on)=>{e.currentTarget.style.background=on?C.hover:"transparent"};
+
+  if(!authToken)return React.createElement(LoginScreen,{onLogin:handleLogin});
 
   return React.createElement("div",{style:{fontFamily:F.b,background:C.bg,color:C.tx,height:"100vh",display:"flex",overflow:"hidden"}},
     React.createElement("style",null,`@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');`),
@@ -1103,7 +1299,17 @@ function App(){
           n.id==="scanner"&&config.claudeKey&&React.createElement("span",{style:{marginLeft:"auto",width:6,height:6,borderRadius:"50%",background:C.ok}})
         ))
       ),
-      React.createElement("div",{style:{padding:"12px"}},
+      currentUser&&React.createElement("div",{style:{padding:"4px 12px"}},
+        React.createElement("div",{style:{padding:"8px 10px",background:C.bg,borderRadius:8,border:"1px solid "+C.brd,display:"flex",alignItems:"center",gap:8}},
+          React.createElement("div",{style:{width:26,height:26,borderRadius:"50%",background:C.accG,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.acc,fontFamily:F.m,flexShrink:0}},(currentUser.name||currentUser.email||"U").charAt(0).toUpperCase()),
+          React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+            React.createElement("div",{style:{fontSize:10,fontFamily:F.m,color:C.tx,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},currentUser.name||currentUser.email),
+            React.createElement("div",{style:{fontSize:9,color:C.txD,fontFamily:F.m,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},currentUser.email||"")
+          ),
+          React.createElement("button",{onClick:handleLogout,title:"Cerrar sesión",style:{background:"none",border:"none",color:C.txD,cursor:"pointer",fontSize:13,padding:2,flexShrink:0}},"⏻")
+        )
+      ),
+      React.createElement("div",{style:{padding:"4px 12px"}},
         React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.brd}`}},
           React.createElement("div",{style:{width:8,height:8,borderRadius:"50%",background:config.claudeKey?C.ok:C.acc,animation:config.claudeKey?"none":"pulse 2s infinite"}}),
           React.createElement("div",null,
@@ -1164,7 +1370,7 @@ function App(){
         // DASHBOARD
         tab==="dashboard"&&React.createElement("div",{style:{animation:"slideIn .3s ease"}},
           React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:16,marginBottom:24}},
-            [{l:"Pipeline Total",v:fmt(totVal),s:projects.length+" proyectos",c:C.acc},{l:"Alertas Críticas",v:critN,s:"Requieren acción",c:C.cr},{l:"Prob. Voladura",v:avgB+"%",s:"Promedio pipeline",c:C.ok},{l:"Win Rate",v:lastWR+"%",s:"Últimos 6 meses",c:C.md}].map((k,i)=>
+            [{l:"Pipeline Total",v:dashStats?fmt(dashStats.totalValue||0):fmt(totVal),s:dashStats?(dashStats.totalProjects||0)+" proyectos":projects.length+" proyectos",c:C.acc},{l:"Ganados",v:dashStats?(dashStats.wonCount||0):critN,s:dashStats?fmt(dashStats.wonValue||0)+" valor":"Requieren acción",c:C.ok},{l:"Win Rate",v:dashStats?((dashStats.winRate||0)+"%"):(avgB+"%"),s:dashStats?"Tasa de conversión":"Promedio pipeline",c:C.md},{l:"Perdidos",v:dashStats?(dashStats.lostCount||0):(lastWR+"%"),s:dashStats?"Proyectos perdidos":"Últimos 6 meses",c:C.cr}].map((k,i)=>
               React.createElement("div",{key:i,style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,padding:"18px 20px"}},
                 React.createElement("div",{style:{fontSize:10,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:12}},k.l),
                 React.createElement("div",{style:{fontSize:26,fontWeight:700,color:k.c,fontFamily:F.m,marginBottom:4}},k.v),
@@ -1453,7 +1659,7 @@ function App(){
         )
       )
     ),
-    React.createElement(Modal,{project:sel,onClose:()=>setSel(null),onAddNote:addNote,onUpdateProject:updateProject})
+    React.createElement(Modal,{project:sel,onClose:()=>setSel(null),onAddNote:addNote,onUpdateProject:updateProject,authToken:authToken})
   );
 }
 
