@@ -169,41 +169,119 @@ function parseJSONArray(text){
   return [];
 }
 
-async function scanDGCP(claudeKey, existingTitles){
+// === MULTI-PHASE SCANNER ===
+function buildScanPrompt(fase, year, mesNombre, excluir, today, now){
+  const jsonTemplate=`[{"id":"DO-${String(Date.now()).slice(-4)}","titulo":"nombre","fuente":"donde lo encontraste","tipo":"Carreteras","region":"Norte","provincia":"Santiago","valor_estimado":0,"prob_voladura":80,"fecha_deteccion":"${today}","status":"detectado","descripcion":"descripción","señales":"por qué necesita explosivos","ai_insight":"estrategia comercial","prioridad":"high","contacto":"entidad","url_licitacion":null,"url_fuente":"https://...","codigo_proceso":"","ultima_actualizacion":"${now}"}]`;
+  const fases={
+    dgcp:{
+      label:"Portal DGCP",
+      prompt:`TAREA: Usa web_search para buscar licitaciones en comprasdominicana.gob.do que necesiten servicios de voladura o explosivos.
+
+BÚSQUEDAS:
+1. "licitación obras comprasdominicana.gob.do ${year}"
+2. "comprasdominicana carretera construcción ${year}"
+3. "comprasdominicana infraestructura ${mesNombre}"
+
+TIPOS: carreteras, autopistas, presas, puentes, túneles, movimiento de tierra, puertos.
+AÑO: Solo ${year}. EXCLUIR: ${excluir}.
+
+INSTRUCCIÓN CRÍTICA: Tu respuesta DEBE ser ÚNICAMENTE un array JSON válido. Sin texto antes ni después. Sin explicaciones. Sin markdown. Así:
+${jsonTemplate}
+Si no encuentras resultados responde exactamente: []
+NO respondas con texto explicativo. SOLO el array JSON.`
+    },
+    mopc:{
+      label:"MOPC + Infraestructura",
+      prompt:`TAREA: Usa web_search para buscar proyectos del MOPC y noticias de infraestructura en República Dominicana que requieran voladura.
+
+BÚSQUEDAS:
+1. "MOPC licitación obras ${year} República Dominicana"
+2. "proyecto infraestructura carretera dominicana ${mesNombre}"
+3. "construcción autopista puente dominicana ${year}"
+
+FUENTES: mopc.gob.do, diariolibre.com, listindiario.com, elnuevodiario.com.do
+TIPOS: carreteras, autopistas, puentes de montaña, presas, represas, acueductos en roca.
+AÑO: Solo ${year}. EXCLUIR: ${excluir}.
+
+INSTRUCCIÓN CRÍTICA: Tu respuesta DEBE ser ÚNICAMENTE un array JSON válido. Sin texto antes ni después. Sin explicaciones. Sin markdown. Así:
+${jsonTemplate}
+Si no encuentras resultados responde exactamente: []
+NO respondas con texto explicativo. SOLO el array JSON.`
+    },
+    mineria:{
+      label:"Minería y Canteras",
+      prompt:`TAREA: Usa web_search para buscar proyectos de minería, canteras y excavación en República Dominicana que necesiten explosivos.
+
+BÚSQUEDAS:
+1. "minería cantera República Dominicana contrato ${year}"
+2. "concesión minera explotación dominicana ${mesNombre}"
+3. "proyecto minero excavación roca dominicana"
+
+FUENTES: dgm.gob.do, noticias minería dominicana, Cámara Minera
+TIPOS: canteras, minería metálica, agregados, explotación de yacimientos, excavaciones masivas.
+AÑO: Solo ${year}. EXCLUIR: ${excluir}.
+
+INSTRUCCIÓN CRÍTICA: Tu respuesta DEBE ser ÚNICAMENTE un array JSON válido. Sin texto antes ni después. Sin explicaciones. Sin markdown. Así:
+${jsonTemplate}
+Si no encuentras resultados responde exactamente: []
+NO respondas con texto explicativo. SOLO el array JSON.`
+    }
+  };
+  return fases[fase];
+}
+
+async function scanDGCP(claudeKey, existingTitles, onPhaseUpdate){
   const today=new Date().toISOString().split("T")[0];
   const now=new Date().toISOString();
   const excluir=existingTitles.slice(0,8).join("; ")||"ninguno";
   const d=new Date();
-  const mesActual=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+  const year=d.getFullYear();
   const mesNombre=d.toLocaleString("es-DO",{month:"long",year:"numeric"});
 
-  const prompt=`TAREA: Usa web_search para buscar licitaciones y proyectos de construcción en República Dominicana que necesiten servicios de voladura o explosivos.
+  const fases=["dgcp","mopc","mineria"];
+  const allProjects=[];
+  const errors=[];
+  const seenTitles=new Set(existingTitles.map(t=>t.toLowerCase()));
 
-BÚSQUEDAS SUGERIDAS:
-1. "licitación carretera República Dominicana ${d.getFullYear()}" en comprasdominicana.gob.do
-2. "proyecto infraestructura voladura dominicana ${mesNombre}"
-3. "MOPC licitación obras ${d.getFullYear()}"
-4. "minería cantera República Dominicana contrato"
+  // Run all 3 phases in parallel
+  const promises=fases.map(async(fase)=>{
+    const info=buildScanPrompt(fase,year,mesNombre,excluir,today,now);
+    if(onPhaseUpdate)onPhaseUpdate(fase,"scanning",info.label);
+    try{
+      const text=await claudeCall(claudeKey,info.prompt,true);
+      const projects=parseJSONArray(text);
+      if(onPhaseUpdate)onPhaseUpdate(fase,"done",info.label,projects.length);
+      return{fase,projects,raw:text,success:true,label:info.label};
+    }catch(err){
+      if(onPhaseUpdate)onPhaseUpdate(fase,"error",info.label,0);
+      return{fase,projects:[],error:err.message,success:false,label:info.label};
+    }
+  });
 
-TIPOS: carreteras, autopistas, presas, canteras, minería, túneles, puentes, movimiento de tierra masivo, puertos.
+  const results=await Promise.all(promises);
 
-AÑO: Solo ${d.getFullYear()}.
-EXCLUIR proyectos ya conocidos: ${excluir}.
-
-INSTRUCCIÓN CRÍTICA: Tu respuesta DEBE ser ÚNICAMENTE un array JSON válido. Sin texto antes ni después. Sin explicaciones. Sin markdown. Así:
-[{"id":"DO-${String(Date.now()).slice(-4)}","titulo":"nombre","fuente":"donde lo encontraste","tipo":"Carreteras","region":"Norte","provincia":"Santiago","valor_estimado":0,"prob_voladura":80,"fecha_deteccion":"${today}","status":"detectado","descripcion":"descripción","señales":"por qué necesita explosivos","ai_insight":"estrategia comercial","prioridad":"high","contacto":"entidad","url_licitacion":null,"url_fuente":"https://...","codigo_proceso":"","ultima_actualizacion":"${now}"}]
-
-Si no encuentras resultados responde exactamente: []
-NO respondas con texto explicativo. SOLO el array JSON.`;
-
-  try{
-    const text=await claudeCall(claudeKey,prompt,true);
-    const projects=parseJSONArray(text);
-    return{success:true,projects,raw:text};
-  }catch(err){
-    return{success:false,error:err.message,projects:[]};
+  // Merge and deduplicate
+  for(const r of results){
+    if(r.success){
+      for(const p of r.projects){
+        const title=(p.titulo||p.title||"").toLowerCase();
+        if(title&&!seenTitles.has(title)){
+          seenTitles.add(title);
+          p._fase=r.label;
+          allProjects.push(p);
+        }
+      }
+    }else{
+      errors.push(`${r.label}: ${r.error}`);
+    }
   }
+
+  return{success:errors.length<3,projects:allProjects,errors,phases:results};
 }
+
+// Scan history stored in localStorage
+function getScanHistory(){try{return JSON.parse(localStorage.getItem("geoScanHistory")||"[]")}catch(e){return[]}}
+function saveScanHistory(entry){try{const h=getScanHistory();h.unshift(entry);localStorage.setItem("geoScanHistory",JSON.stringify(h.slice(0,30)))}catch(e){}}
 
 // ===== ADJUDICADAS — Claude web_search =====
 async function buscarAdjudicadas(claudeKey){
@@ -587,111 +665,191 @@ function Modal({project:p,onClose,onAddNote,onUpdateProject,authToken}){
 }
 
 // ===== SCANNER COMPONENT =====
-function Scanner({claudeKey, projects, onNewProjects}){
+function Scanner({claudeKey, projects, onNewProjects, onScanNotify}){
   const[scanning,setScanning]=useState(false);
   const[log,setLog]=useState([]);
-  const[found,setFound]=useState([]);
+  const[found,setFound]=useState(()=>{try{return JSON.parse(localStorage.getItem("geoScanFound")||"[]")}catch(e){return[]}});
   const[autoEnabled,setAutoEnabled]=useState(()=>{try{return localStorage.getItem('geoAutoScan')==='true'}catch(e){return false}});
+  const[phases,setPhases]=useState({dgcp:"idle",mopc:"idle",mineria:"idle"});
+  const[filterType,setFilterType]=useState("all");
+  const[filterPri,setFilterPri]=useState("all");
+  const[showHistory,setShowHistory]=useState(false);
+  const[history]=useState(()=>getScanHistory());
   const intervalRef=useRef(null);
-  
-  const addLog=(msg,type="info")=>setLog(prev=>[{msg,type,time:new Date().toLocaleTimeString("es-DO",{hour:"2-digit",minute:"2-digit",second:"2-digit"})},...prev].slice(0,50));
+
+  const addLog=(msg,type="info")=>setLog(prev=>[{msg,type,time:new Date().toLocaleTimeString("es-DO",{hour:"2-digit",minute:"2-digit",second:"2-digit"})},...prev].slice(0,80));
+
+  const handlePhaseUpdate=(fase,status,label,count)=>{
+    setPhases(prev=>({...prev,[fase]:status}));
+    if(status==="scanning")addLog(`🔍 Fase ${label}: buscando...`,"search");
+    else if(status==="done")addLog(`✅ Fase ${label}: ${count} resultado(s)`,"success");
+    else if(status==="error")addLog(`❌ Fase ${label}: error`,"error");
+  };
 
   const runScan=useCallback(async()=>{
     if(scanning||!claudeKey)return;
     setScanning(true);
-    addLog("Conectando con Portal DGCP...","scan");
-    addLog("Descargando licitaciones recientes del Estado dominicano...","search");
+    setPhases({dgcp:"scanning",mopc:"scanning",mineria:"scanning"});
+    addLog("🚀 Escaneo multi-fase iniciado (3 búsquedas en paralelo)","scan");
 
-    const existingTitles=projects.map(p=>p.title||p.titulo||"");
-    addLog("Enviando búsqueda a Claude con web_search...","search");
-    const result=await scanDGCP(claudeKey,existingTitles);
+    const existingTitles=[...projects,...found].map(p=>p.title||p.titulo||"");
+    const result=await scanDGCP(claudeKey,existingTitles,handlePhaseUpdate);
 
     if(result.success){
-      addLog("✅ Claude respondió correctamente","search");
-      if(result.raw)addLog("Respuesta (preview): "+result.raw.slice(0,250),"info");
       if(result.projects.length>0){
-        addLog(`✅ ${result.projects.length} licitación(es) con potencial de voladura`,"success");
-        const newProjects=result.projects.map(normalizeProject);
-        setFound(prev=>[...newProjects,...prev]);
+        addLog(`✅ TOTAL: ${result.projects.length} licitación(es) con potencial de voladura`,"success");
+        const newProjects=result.projects.map(p=>{const n=normalizeProject(p);n._fase=p._fase||"";return n;});
+        setFound(prev=>{const merged=[...newProjects,...prev];try{localStorage.setItem("geoScanFound",JSON.stringify(merged.slice(0,200)))}catch(e){}return merged;});
         onNewProjects(newProjects);
-        newProjects.forEach(p=>addLog(`→ [${p.codigoProceso||p.id||"DGCP"}] ${p.title} | Voladura: ${p.blastingProbability}%`,"project"));
+        if(onScanNotify)onScanNotify(newProjects.length);
+        newProjects.forEach(p=>addLog(`→ [${p._fase||""}] ${p.title} | ${p.type} | Voladura: ${p.blastingProbability}%`,"project"));
       }else{
-        addLog("⚠ Claude no encontró licitaciones nuevas","info");
-        if(result.raw)addLog("Texto completo: "+result.raw.slice(0,400),"info");
+        addLog("⚠ No se encontraron licitaciones nuevas en ninguna fase","info");
       }
+      if(result.errors.length>0)result.errors.forEach(e=>addLog("⚠ "+e,"error"));
     }else{
-      addLog(`❌ Error API: ${result.error}`,"error");
-      if(result.raw)addLog("Raw: "+result.raw.slice(0,300),"info");
+      addLog("❌ Todas las fases fallaron","error");
+      result.errors.forEach(e=>addLog("  "+e,"error"));
     }
 
-    addLog("Escaneo completado","scan");
-    setScanning(false);
-  },[claudeKey,projects,scanning,onNewProjects]);
+    // Save to history
+    saveScanHistory({date:new Date().toISOString(),found:result.projects.length,phases:result.phases?.map(p=>({fase:p.label,count:p.projects.length,ok:p.success}))||[]});
 
-  // Persist autoEnabled
+    addLog("Escaneo multi-fase completado","scan");
+    setScanning(false);
+  },[claudeKey,projects,found,scanning,onNewProjects,onScanNotify]);
+
   useEffect(()=>{try{localStorage.setItem('geoAutoScan',autoEnabled)}catch(e){}},[autoEnabled]);
 
-  // Auto scan
   useEffect(()=>{
     if(autoEnabled&&claudeKey){
       addLog("⏰ Auto-escaneo activado: cada 4 horas","auto");
       intervalRef.current=setInterval(runScan,4*60*60*1000);
       return()=>clearInterval(intervalRef.current);
-    }else{
-      if(intervalRef.current)clearInterval(intervalRef.current);
-    }
+    }else{if(intervalRef.current)clearInterval(intervalRef.current);}
   },[autoEnabled,claudeKey]);
 
+  const phaseLabels={dgcp:"Portal DGCP",mopc:"MOPC + Infra",mineria:"Minería"};
+  const phaseIcons={idle:"⏸",scanning:"⟳",done:"✅",error:"❌"};
   const logColors={info:C.txM,scan:C.acc,search:C.md,success:C.ok,error:C.cr,project:C.hi,auto:C.md};
 
-  return React.createElement("div",{style:{animation:"slideIn .3s ease",height:"100%",display:"flex",flexDirection:"column"}},
+  // Filter found results
+  const types=[...new Set(found.map(p=>p.type).filter(Boolean))];
+  const filtered=found.filter(p=>{
+    if(filterType!=="all"&&p.type!==filterType)return false;
+    if(filterPri!=="all"&&p.priority!==filterPri)return false;
+    return true;
+  });
+
+  return React.createElement("div",{style:{animation:"slideIn .3s ease",height:"100%",display:"flex",flexDirection:"column",overflow:"hidden"}},
     // Header
-    React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}},
+    React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexShrink:0}},
       React.createElement("div",null,
-        React.createElement("h2",{style:{fontSize:14,fontWeight:700,fontFamily:F.h,color:C.tx,marginBottom:4}},"Escáner Portal DGCP"),
+        React.createElement("h2",{style:{fontSize:14,fontWeight:700,fontFamily:F.h,color:C.tx,marginBottom:4}},"Escáner Multi-Fase"),
         React.createElement("p",{style:{fontSize:12,color:C.txM,fontFamily:F.b}},
-          claudeKey?"Jala licitaciones reales del Estado dominicano y Claude filtra las que necesitan explosivos":"⚠ Configura tu API Key de Claude en el tab Conexión"
+          claudeKey?"3 búsquedas en paralelo: DGCP + MOPC + Minería":"⚠ Configura tu API Key en Conexión"
         )
       ),
-      React.createElement("div",{style:{display:"flex",gap:10,alignItems:"center"}},
-        // Auto toggle
-        React.createElement("div",{onClick:()=>claudeKey&&setAutoEnabled(!autoEnabled),style:{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",background:autoEnabled?C.okBg:C.bg,border:`1px solid ${autoEnabled?C.ok+"44":C.brd}`,borderRadius:8,cursor:claudeKey?"pointer":"not-allowed",opacity:claudeKey?1:.4}},
-          React.createElement("div",{style:{width:36,height:20,borderRadius:10,background:autoEnabled?C.ok:C.brd,display:"flex",alignItems:"center",padding:2,justifyContent:autoEnabled?"flex-end":"flex-start",transition:"all .2s"}},
-            React.createElement("div",{style:{width:16,height:16,borderRadius:"50%",background:"#fff",transition:"all .2s"}})
+      React.createElement("div",{style:{display:"flex",gap:8,alignItems:"center"}},
+        React.createElement("button",{onClick:()=>setShowHistory(!showHistory),style:{background:showHistory?C.accG:"transparent",border:`1px solid ${showHistory?C.acc+"44":C.brd}`,borderRadius:8,padding:"8px 12px",fontSize:11,color:showHistory?C.acc:C.txM,fontFamily:F.m,cursor:"pointer"}},"📋 Historial"),
+        React.createElement("div",{onClick:()=>claudeKey&&setAutoEnabled(!autoEnabled),style:{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:autoEnabled?C.okBg:C.bg,border:`1px solid ${autoEnabled?C.ok+"44":C.brd}`,borderRadius:8,cursor:claudeKey?"pointer":"not-allowed",opacity:claudeKey?1:.4}},
+          React.createElement("div",{style:{width:32,height:18,borderRadius:9,background:autoEnabled?C.ok:C.brd,display:"flex",alignItems:"center",padding:2,justifyContent:autoEnabled?"flex-end":"flex-start",transition:"all .2s"}},
+            React.createElement("div",{style:{width:14,height:14,borderRadius:"50%",background:"#fff",transition:"all .2s"}})
           ),
-          React.createElement("span",{style:{fontSize:11,fontFamily:F.m,color:autoEnabled?C.ok:C.txM}},"Auto 4h")
+          React.createElement("span",{style:{fontSize:10,fontFamily:F.m,color:autoEnabled?C.ok:C.txM}},"Auto")
         ),
-        // Scan button
-        React.createElement("button",{onClick:runScan,disabled:scanning||!claudeKey,style:{background:scanning?"transparent":C.acc,border:scanning?`2px solid ${C.acc}`:"2px solid transparent",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,color:scanning?C.acc:C.bg,fontFamily:F.m,cursor:scanning||!claudeKey?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:8,animation:scanning?"scanPulse 2s infinite":"none",opacity:claudeKey?1:.4}},
+        React.createElement("button",{onClick:runScan,disabled:scanning||!claudeKey,style:{background:scanning?"transparent":C.acc,border:scanning?`2px solid ${C.acc}`:"2px solid transparent",borderRadius:10,padding:"10px 20px",fontSize:12,fontWeight:700,color:scanning?C.acc:C.bg,fontFamily:F.m,cursor:scanning||!claudeKey?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:6,animation:scanning?"scanPulse 2s infinite":"none",opacity:claudeKey?1:.4}},
           scanning&&React.createElement("span",{style:{display:"inline-flex",animation:"spin 1s linear infinite"}},"⟳"),
-          scanning?"ESCANEANDO...":"⚡ ESCANEAR AHORA"
-        )
-      )
-    ),
-    
-    // Stats
-    found.length>0&&React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:16}},
-      [{l:"Detectados Hoy",v:found.length,c:C.ok},{l:"Alta Prioridad",v:found.filter(p=>p.prioridad==="critical"||p.prioridad==="high"||p.priority==="critical"||p.priority==="high").length,c:C.hi},{l:"Valor Detectado",v:fmt(found.reduce((s,p)=>s+(p.valor_estimado||p.estimatedValue||0),0)),c:C.acc}].map((k,i)=>
-        React.createElement("div",{key:i,style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:10,padding:"14px 16px",textAlign:"center"}},
-          React.createElement("div",{style:{fontSize:9,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:4}},k.l),
-          React.createElement("div",{style:{fontSize:22,fontWeight:700,color:k.c,fontFamily:F.m}},k.v)
+          scanning?"ESCANEANDO...":"⚡ ESCANEAR"
         )
       )
     ),
 
-    // Log
-    React.createElement("div",{style:{flex:1,background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,overflow:"hidden",display:"flex",flexDirection:"column"}},
-      React.createElement("div",{style:{padding:"12px 16px",borderBottom:`1px solid ${C.brd}`,display:"flex",justifyContent:"space-between",alignItems:"center"}},
-        React.createElement("span",{style:{fontSize:11,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1}},"ACTIVIDAD — PORTAL DGCP"),
-        log.length>0&&React.createElement("button",{onClick:()=>setLog([]),style:{background:"none",border:"none",color:C.txD,fontSize:10,fontFamily:F.m,cursor:"pointer"}},"Limpiar")
+    // Phase indicators
+    scanning&&React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:12,flexShrink:0}},
+      ["dgcp","mopc","mineria"].map(f=>React.createElement("div",{key:f,style:{background:C.card,border:`1px solid ${phases[f]==="done"?C.ok+"44":phases[f]==="error"?C.cr+"44":C.brd}`,borderRadius:8,padding:"10px 12px",display:"flex",alignItems:"center",gap:8}},
+        React.createElement("span",{style:{fontSize:14,animation:phases[f]==="scanning"?"spin 1s linear infinite":"none",display:"inline-flex"}},phaseIcons[phases[f]]),
+        React.createElement("div",null,
+          React.createElement("div",{style:{fontSize:10,fontWeight:700,fontFamily:F.m,color:phases[f]==="done"?C.ok:phases[f]==="error"?C.cr:C.tx}},phaseLabels[f]),
+          React.createElement("div",{style:{fontSize:9,color:C.txD,fontFamily:F.m}},phases[f]==="scanning"?"Buscando...":phases[f]==="done"?"Completado":phases[f]==="error"?"Error":"Esperando")
+        )
+      ))
+    ),
+
+    // Stats bar
+    found.length>0&&React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:12,flexShrink:0}},
+      [{l:"Total Detectados",v:found.length,c:C.ok},{l:"Alta Prioridad",v:found.filter(p=>p.priority==="critical"||p.priority==="high").length,c:C.hi},{l:"Valor Total",v:fmt(found.reduce((s,p)=>s+(p.estimatedValue||0),0)),c:C.acc},{l:"Tipos",v:types.length,c:C.md}].map((k,i)=>
+        React.createElement("div",{key:i,style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:8,padding:"10px 12px",textAlign:"center"}},
+          React.createElement("div",{style:{fontSize:8,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1,marginBottom:2}},k.l),
+          React.createElement("div",{style:{fontSize:18,fontWeight:700,color:k.c,fontFamily:F.m}},k.v)
+        )
+      )
+    ),
+
+    // Filters
+    found.length>0&&React.createElement("div",{style:{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap",flexShrink:0}},
+      React.createElement("span",{style:{fontSize:10,color:C.txD,fontFamily:F.m,alignSelf:"center",marginRight:4}},"Filtrar:"),
+      [["all","Todos"],...types.map(t=>[t,t])].map(([val,label])=>
+        React.createElement("button",{key:val,onClick:()=>setFilterType(val),style:{padding:"4px 10px",borderRadius:6,border:`1px solid ${filterType===val?C.acc+"66":C.brd}`,background:filterType===val?C.accG:"transparent",color:filterType===val?C.acc:C.txM,fontSize:10,fontFamily:F.m,cursor:"pointer",fontWeight:filterType===val?700:400}},label)
       ),
-      React.createElement("div",{style:{flex:1,overflow:"auto",padding:"8px 16px"}},
-        log.length===0?
-          React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:C.txD,fontFamily:F.b,fontSize:13}},"Dale click a \"Escanear Ahora\" para consultar licitaciones del Portal DGCP"):
-          log.map((l,i)=>React.createElement("div",{key:i,style:{display:"flex",gap:10,padding:"6px 0",borderBottom:`1px solid ${C.brd}11`,animation:`slideIn .2s ease`}},
-            React.createElement("span",{style:{fontSize:10,color:C.txD,fontFamily:F.m,flexShrink:0,marginTop:2}},l.time),
-            React.createElement("span",{style:{fontSize:12,color:logColors[l.type]||C.txM,fontFamily:l.type==="project"?F.m:F.b,lineHeight:1.4}},l.msg)
+      React.createElement("span",{style:{width:1,background:C.brd,margin:"0 4px"}}),
+      [["all","Todas"],["critical","Crítica"],["high","Alta"],["medium","Media"]].map(([val,label])=>
+        React.createElement("button",{key:"p"+val,onClick:()=>setFilterPri(val),style:{padding:"4px 10px",borderRadius:6,border:`1px solid ${filterPri===val?C.hi+"66":C.brd}`,background:filterPri===val?pB(val):"transparent",color:filterPri===val?pC(val):C.txM,fontSize:10,fontFamily:F.m,cursor:"pointer",fontWeight:filterPri===val?700:400}},label)
+      )
+    ),
+
+    // History panel
+    showHistory?React.createElement("div",{style:{flex:1,background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,overflow:"auto",padding:16}},
+      React.createElement("div",{style:{fontSize:11,fontFamily:F.m,color:C.txD,textTransform:"uppercase",letterSpacing:1,marginBottom:12}},"HISTORIAL DE ESCANEOS"),
+      getScanHistory().length===0?
+        React.createElement("div",{style:{color:C.txD,fontSize:12,fontFamily:F.b,textAlign:"center",padding:40}},"No hay escaneos previos"):
+        getScanHistory().map((h,i)=>React.createElement("div",{key:i,style:{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",background:i%2===0?C.bg:"transparent",borderRadius:6,marginBottom:2}},
+          React.createElement("div",{style:{fontSize:11,color:C.txM,fontFamily:F.m,flexShrink:0,minWidth:130}},new Date(h.date).toLocaleString("es-DO",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"})),
+          React.createElement("div",{style:{fontSize:18,fontWeight:700,color:h.found>0?C.ok:C.txD,fontFamily:F.m,minWidth:30,textAlign:"center"}},h.found),
+          React.createElement("div",{style:{fontSize:10,color:C.txM,fontFamily:F.b}},"resultado"+(h.found!==1?"s":"")),
+          h.phases&&React.createElement("div",{style:{display:"flex",gap:4,marginLeft:"auto"}},
+            h.phases.map((p,j)=>React.createElement("span",{key:j,style:{fontSize:9,padding:"2px 6px",borderRadius:4,background:p.ok?(p.count>0?C.okBg:C.bg):C.crBg,color:p.ok?(p.count>0?C.ok:C.txD):C.cr,fontFamily:F.m}},p.fase+": "+p.count))
+          )
+        ))
+    ):
+
+    // Main content: Log + Results
+    React.createElement("div",{style:{flex:1,display:"flex",gap:12,overflow:"hidden",minHeight:0}},
+      // Log panel (left)
+      React.createElement("div",{style:{flex:1,background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,overflow:"hidden",display:"flex",flexDirection:"column"}},
+        React.createElement("div",{style:{padding:"10px 14px",borderBottom:`1px solid ${C.brd}`,display:"flex",justifyContent:"space-between",alignItems:"center"}},
+          React.createElement("span",{style:{fontSize:10,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1}},"ACTIVIDAD"),
+          log.length>0&&React.createElement("button",{onClick:()=>setLog([]),style:{background:"none",border:"none",color:C.txD,fontSize:9,fontFamily:F.m,cursor:"pointer"}},"Limpiar")
+        ),
+        React.createElement("div",{style:{flex:1,overflow:"auto",padding:"6px 14px"}},
+          log.length===0?
+            React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:C.txD,fontFamily:F.b,fontSize:12,textAlign:"center"}},"Click \"Escanear\" para iniciar\n3 búsquedas en paralelo"):
+            log.map((l,i)=>React.createElement("div",{key:i,style:{display:"flex",gap:8,padding:"4px 0",borderBottom:`1px solid ${C.brd}11`,animation:"slideIn .2s ease"}},
+              React.createElement("span",{style:{fontSize:9,color:C.txD,fontFamily:F.m,flexShrink:0,marginTop:1}},l.time),
+              React.createElement("span",{style:{fontSize:11,color:logColors[l.type]||C.txM,fontFamily:l.type==="project"?F.m:F.b,lineHeight:1.4}},l.msg)
+            ))
+        )
+      ),
+      // Results panel (right)
+      filtered.length>0&&React.createElement("div",{style:{flex:1,background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,overflow:"hidden",display:"flex",flexDirection:"column"}},
+        React.createElement("div",{style:{padding:"10px 14px",borderBottom:`1px solid ${C.brd}`,display:"flex",justifyContent:"space-between",alignItems:"center"}},
+          React.createElement("span",{style:{fontSize:10,color:C.txD,fontFamily:F.m,textTransform:"uppercase",letterSpacing:1}},"RESULTADOS ("+filtered.length+")"),
+          React.createElement("button",{onClick:()=>{setFound([]);try{localStorage.removeItem("geoScanFound")}catch(e){}},style:{background:"none",border:"none",color:C.txD,fontSize:9,fontFamily:F.m,cursor:"pointer"}},"Limpiar")
+        ),
+        React.createElement("div",{style:{flex:1,overflow:"auto",padding:"6px 10px"}},
+          filtered.map((p,i)=>React.createElement("div",{key:p.id||i,style:{padding:"8px 10px",marginBottom:4,background:C.bg,borderRadius:8,border:`1px solid ${C.brd}`,cursor:"pointer"},onClick:()=>{}},
+            React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}},
+              React.createElement("div",{style:{fontSize:11,fontWeight:600,color:C.tx,fontFamily:F.b,lineHeight:1.3,flex:1,marginRight:8}},p.title),
+              React.createElement("span",{style:{fontSize:9,padding:"2px 6px",borderRadius:4,background:pB(p.priority),color:pC(p.priority),fontFamily:F.m,fontWeight:700,flexShrink:0}},p.priority)
+            ),
+            React.createElement("div",{style:{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}},
+              p.type&&React.createElement("span",{style:{fontSize:9,padding:"2px 6px",borderRadius:4,background:C.mdBg,color:C.md,fontFamily:F.m}},p.type),
+              p.province&&React.createElement("span",{style:{fontSize:9,color:C.txD,fontFamily:F.m}},p.province),
+              p._fase&&React.createElement("span",{style:{fontSize:8,padding:"1px 5px",borderRadius:3,background:C.accG,color:C.acc,fontFamily:F.m}},p._fase),
+              React.createElement("span",{style:{fontSize:9,color:C.txM,fontFamily:F.m,marginLeft:"auto"}},p.blastingProbability+"%")
+            )
           ))
+        )
       )
     )
   );
@@ -1010,6 +1168,7 @@ function App(){
   const[sidebarOpen,setSidebarOpen]=useState(false);
   const[historical,setHistorical]=useState(DEFAULT_HISTORICAL);
   const[dashStats,setDashStats]=useState(null);
+  const[scanBadge,setScanBadge]=useState(0);
   const savedConfig=useRef(null);
   if(!savedConfig.current){
     try{
@@ -1279,10 +1438,10 @@ function App(){
         )
       ),
       React.createElement("nav",{style:{flex:1,padding:"12px 8px"}},
-        navs.map(n=>React.createElement("button",{key:n.id,onClick:()=>setTab(n.id),style:{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",marginBottom:2,background:tab===n.id?C.accG:"transparent",border:tab===n.id?`1px solid ${C.acc}33`:"1px solid transparent",borderRadius:8,cursor:"pointer",color:tab===n.id?C.acc:C.txM,fontFamily:F.b,fontSize:13,fontWeight:tab===n.id?600:400}},
+        navs.map(n=>React.createElement("button",{key:n.id,onClick:()=>{setTab(n.id);if(n.id==="scanner")setScanBadge(0);},style:{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",marginBottom:2,background:tab===n.id?C.accG:"transparent",border:tab===n.id?`1px solid ${C.acc}33`:"1px solid transparent",borderRadius:8,cursor:"pointer",color:tab===n.id?C.acc:C.txM,fontFamily:F.b,fontSize:13,fontWeight:tab===n.id?600:400}},
           React.createElement("span",{style:{fontSize:15}},n.ico),n.label,
-          n.id==="scanner"&&candidates.length>0&&React.createElement("span",{style:{marginLeft:"auto",minWidth:18,height:18,borderRadius:9,background:C.acc,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:700,color:C.bg,fontFamily:F.m}},candidates.length),
-          n.id==="scanner"&&config.claudeKey&&React.createElement("span",{style:{marginLeft:"auto",width:6,height:6,borderRadius:"50%",background:C.ok}})
+          n.id==="scanner"&&(scanBadge>0||candidates.length>0)&&React.createElement("span",{style:{marginLeft:"auto",minWidth:18,height:18,borderRadius:9,background:scanBadge>0?C.ok:C.acc,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:700,color:C.bg,fontFamily:F.m,animation:scanBadge>0?"pulse 2s infinite":"none"}},scanBadge>0?"+"+scanBadge:candidates.length),
+          n.id==="scanner"&&scanBadge===0&&candidates.length===0&&config.claudeKey&&React.createElement("span",{style:{marginLeft:"auto",width:6,height:6,borderRadius:"50%",background:C.ok}})
         ))
       ),
       React.createElement("div",{style:{padding:"4px 12px"}},
@@ -1553,7 +1712,7 @@ function App(){
 
         // SCANNER
         tab==="scanner"&&React.createElement("div",{style:{animation:"slideIn .3s ease",display:"flex",flexDirection:"column",gap:20}},
-          React.createElement(Scanner,{claudeKey:config.claudeKey,projects:[...projects,...candidates],onNewProjects:handleNewProjects}),
+          React.createElement(Scanner,{claudeKey:config.claudeKey,projects:[...projects,...candidates],onNewProjects:handleNewProjects,onScanNotify:n=>setScanBadge(prev=>prev+n)}),
           
           // CANDIDATES LIST
           candidates.length>0&&React.createElement("div",{style:{background:C.card,border:`1px solid ${C.brd}`,borderRadius:12,overflow:"hidden"}},
