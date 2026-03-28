@@ -121,20 +121,38 @@ function kanbanColProjects(projects,colId){
 const PROXY_URL="https://yellow-paper-dc25.saulpaulino8.workers.dev";
 
 async function claudeCall(claudeKey, prompt, useWebSearch=true){
-  const body={apiKey:claudeKey,model:"claude-sonnet-4-20250514",max_tokens:4000,messages:[{role:"user",content:prompt}]};
-  if(useWebSearch)body.tools=[{type:"web_search_20250305",name:"web_search"}];
+  const body={apiKey:claudeKey,model:"claude-sonnet-4-20250514",max_tokens:4096,messages:[{role:"user",content:prompt}]};
+  if(useWebSearch)body.tools=[{type:"web_search_20250305",name:"web_search",max_uses:3}];
   const res=await fetch(PROXY_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  if(!res.ok){const e=await res.text();throw new Error(`API ${res.status}: ${e}`);}
-  const data=await res.json();
+  const rawText=await res.text();
+  if(!res.ok)throw new Error(`API ${res.status}: ${rawText.slice(0,300)}`);
+  let data;
+  try{data=JSON.parse(rawText);}catch(e){throw new Error("JSON parse failed: "+rawText.slice(0,200));}
+  if(data.error)throw new Error(data.error.message||JSON.stringify(data.error));
+  // Extract ALL text blocks from response (web_search returns mixed content blocks)
   let text="";
-  for(const b of data.content){if(b.type==="text")text+=b.text;}
+  if(data.content&&Array.isArray(data.content)){
+    for(const b of data.content){if(b.type==="text")text+=b.text;}
+  }
+  if(!text&&data.content)text=JSON.stringify(data.content);
+  console.log("[claudeCall] stop_reason:",data.stop_reason,"text length:",text.length,"text preview:",text.slice(0,300));
   return text;
 }
 
 function parseJSONArray(text){
-  const cleaned=text.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();
+  if(!text||!text.trim())return[];
+  // Strip markdown fences
+  let cleaned=text.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();
+  // Try to find JSON array
   const m=cleaned.match(/\[[\s\S]*\]/);
-  if(m)try{return JSON.parse(m[0]);}catch(e){}
+  if(m){
+    try{return JSON.parse(m[0]);}catch(e){
+      // Try fixing common issues: trailing commas, single quotes
+      const fixed=m[0].replace(/,\s*\]/g,"]").replace(/,\s*\}/g,"}");
+      try{return JSON.parse(fixed);}catch(e2){console.log("[parseJSONArray] Parse failed:",e2.message,"raw:",m[0].slice(0,200));}
+    }
+  }
+  console.log("[parseJSONArray] No array found in:",cleaned.slice(0,300));
   return [];
 }
 
@@ -146,16 +164,24 @@ async function scanDGCP(claudeKey, existingTitles){
   const mesActual=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
   const mesNombre=d.toLocaleString("es-DO",{month:"long",year:"numeric"});
 
-  const prompt=`Busca proyectos de construcción e infraestructura en República Dominicana que necesiten explosivos o voladura. Busca en noticias recientes y en comprasdominicana.gob.do.
+  const prompt=`TAREA: Usa web_search para buscar licitaciones y proyectos de construcción en República Dominicana que necesiten servicios de voladura o explosivos.
 
-Tipos de proyectos: carreteras, autopistas, presas, canteras, minería, túneles, puentes, movimiento de tierra, puertos.
+BÚSQUEDAS SUGERIDAS:
+1. "licitación carretera República Dominicana ${d.getFullYear()}" en comprasdominicana.gob.do
+2. "proyecto infraestructura voladura dominicana ${mesNombre}"
+3. "MOPC licitación obras ${d.getFullYear()}"
+4. "minería cantera República Dominicana contrato"
 
-Solo proyectos de ${d.getFullYear()}. No incluir: ${excluir}.
+TIPOS: carreteras, autopistas, presas, canteras, minería, túneles, puentes, movimiento de tierra masivo, puertos.
 
-Responde SOLO con array JSON sin markdown ni backticks:
-[{"id":"DO-${String(Date.now()).slice(-4)}","titulo":"nombre del proyecto","fuente":"fuente donde lo encontraste","tipo":"Carreteras|Hidroeléctrica|Minería|Industrial|Portuario|Otro","region":"Norte|Sur|Este|Oeste|DN","provincia":"provincia","valor_estimado":0,"prob_voladura":85,"fecha_deteccion":"${today}","status":"detectado","descripcion":"qué es el proyecto","señales":"por qué necesita explosivos","ai_insight":"estrategia para venderles explosivos","prioridad":"high|medium|low","contacto":"entidad responsable","url_licitacion":"link directo a la licitación en comprasdominicana.gob.do si existe, o null","url_fuente":"link de la noticia si aplica","codigo_proceso":"código DGCP si aplica","ultima_actualizacion":"${now}"}]
+AÑO: Solo ${d.getFullYear()}.
+EXCLUIR proyectos ya conocidos: ${excluir}.
 
-Si no encuentras nada responde: []`;
+INSTRUCCIÓN CRÍTICA: Tu respuesta DEBE ser ÚNICAMENTE un array JSON válido. Sin texto antes ni después. Sin explicaciones. Sin markdown. Así:
+[{"id":"DO-${String(Date.now()).slice(-4)}","titulo":"nombre","fuente":"donde lo encontraste","tipo":"Carreteras","region":"Norte","provincia":"Santiago","valor_estimado":0,"prob_voladura":80,"fecha_deteccion":"${today}","status":"detectado","descripcion":"descripción","señales":"por qué necesita explosivos","ai_insight":"estrategia comercial","prioridad":"high","contacto":"entidad","url_licitacion":null,"url_fuente":"https://...","codigo_proceso":"","ultima_actualizacion":"${now}"}]
+
+Si no encuentras resultados responde exactamente: []
+NO respondas con texto explicativo. SOLO el array JSON.`;
 
   try{
     const text=await claudeCall(claudeKey,prompt,true);
@@ -188,7 +214,9 @@ Responde SOLO con array JSON puro sin markdown:
 [{"empresa":"nombre empresa constructora ganadora","proyecto":"nombre del proyecto","institucion":"entidad que adjudicó","valor_dop":0,"fecha_adjudicacion":"fecha si disponible","tipo":"Carreteras|Hidroeléctrica|Minería|Portuario|Otro","provincia":"provincia","descripcion":"descripción del proyecto","por_que_necesita_explosivos":"razón técnica clara: voladura de roca para abrir camino, etc.","url":"URL directa al contrato en comprasdominicana.gob.do o a la noticia","codigo_contrato":"código si disponible","prioridad_contacto":"alta|media|baja","contacto_empresa":"teléfono o web de la constructora si lo encuentras"}]
 
 IMPORTANTE: Busca amplio. Incluye tanto los del portal oficial como los que aparezcan en noticias. Si una constructora grande como Estrella, ODEBRETCH, Haché, CORAAMOCA, etc. ganó un contrato de carretera, ESO es exactamente lo que buscamos.
-Si no encuentras nada responde: []`;
+
+INSTRUCCIÓN CRÍTICA: Tu respuesta DEBE ser ÚNICAMENTE el array JSON. Sin texto antes ni después. Sin explicaciones. Sin markdown ni backticks.
+Si no encuentras nada responde exactamente: []`;
 
   const text=await claudeCall(claudeKey,prompt,true);
   return parseJSONArray(text);
@@ -514,23 +542,25 @@ function Scanner({claudeKey, projects, onNewProjects}){
     addLog("Descargando licitaciones recientes del Estado dominicano...","search");
 
     const existingTitles=projects.map(p=>p.title||p.titulo||"");
+    addLog("Enviando búsqueda a Claude con web_search...","search");
     const result=await scanDGCP(claudeKey,existingTitles);
-    
+
     if(result.success){
-      addLog("✅ Búsqueda completada en portal DGCP y noticias","search");
+      addLog("✅ Claude respondió correctamente","search");
+      if(result.raw)addLog("Respuesta (preview): "+result.raw.slice(0,250),"info");
       if(result.projects.length>0){
         addLog(`✅ ${result.projects.length} licitación(es) con potencial de voladura`,"success");
         const newProjects=result.projects.map(normalizeProject);
         setFound(prev=>[...newProjects,...prev]);
         onNewProjects(newProjects);
-        newProjects.forEach(p=>addLog(`→ [${p.codigoProceso||"DGCP"}] ${p.titulo} | Voladura: ${p.prob_voladura||p.blastingProbability}%`,"project"));
+        newProjects.forEach(p=>addLog(`→ [${p.codigoProceso||p.id||"DGCP"}] ${p.title} | Voladura: ${p.blastingProbability}%`,"project"));
       }else{
-        addLog("No se encontraron licitaciones nuevas relevantes","info");
-        if(result.raw)addLog("Claude respondió: "+result.raw.slice(0,200),"info");
+        addLog("⚠ Claude no encontró licitaciones nuevas","info");
+        if(result.raw)addLog("Texto completo: "+result.raw.slice(0,400),"info");
       }
     }else{
-      addLog(`❌ Error: ${result.error}`,"error");
-      if(result.raw)addLog("Respuesta: "+result.raw.slice(0,150),"info");
+      addLog(`❌ Error API: ${result.error}`,"error");
+      if(result.raw)addLog("Raw: "+result.raw.slice(0,300),"info");
     }
 
     addLog("Escaneo completado","scan");
