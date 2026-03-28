@@ -745,20 +745,16 @@ function AIChat({projects,claudeKey}){
 
 // ===== LOGIN SCREEN =====
 function LoginScreen({onLogin}){
-  const[mode,setMode]=useState("login");
   const[email,setEmail]=useState("");
   const[password,setPassword]=useState("");
-  const[name,setName]=useState("");
   const[error,setError]=useState("");
   const[loading,setLoading]=useState(false);
 
   const handleSubmit=async()=>{
-    if(!email||!password||(mode==="register"&&!name)){setError("Completa todos los campos");return;}
+    if(!email||!password){setError("Completa todos los campos");return;}
     setLoading(true);setError("");
     try{
-      const path=mode==="login"?"/api/login":"/api/register";
-      const body=mode==="login"?{email,password}:{email,password,name};
-      const res=await fetch(api.base+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      const res=await fetch(api.base+"/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})});
       const data=await res.json();
       if(!res.ok||data.error)throw new Error(data.error||"Error de autenticación");
       sessionStorage.setItem("geotechnical_token",data.token);
@@ -775,15 +771,7 @@ function LoginScreen({onLogin}){
         React.createElement("div",{style:{fontSize:16,fontWeight:700,fontFamily:F.h,color:DARK_C.tx}},"GEOTECHNICAL"),
         React.createElement("div",{style:{fontSize:10,color:"#2C6E6A",fontFamily:F.m,letterSpacing:2,fontWeight:600,marginTop:4}},"MARKET INTEL v3")
       ),
-      React.createElement("div",{style:{display:"flex",borderBottom:"1px solid "+DARK_C.brd}},
-        React.createElement("button",{onClick:()=>{setMode("login");setError("");},style:{flex:1,padding:"12px",background:mode==="login"?DARK_C.accG:"transparent",border:"none",borderBottom:mode==="login"?"2px solid "+DARK_C.acc:"2px solid transparent",color:mode==="login"?DARK_C.acc:DARK_C.txM,fontSize:12,fontWeight:700,fontFamily:F.m,cursor:"pointer"}},"INICIAR SESIÓN"),
-        React.createElement("button",{onClick:()=>{setMode("register");setError("");},style:{flex:1,padding:"12px",background:mode==="register"?DARK_C.accG:"transparent",border:"none",borderBottom:mode==="register"?"2px solid "+DARK_C.acc:"2px solid transparent",color:mode==="register"?DARK_C.acc:DARK_C.txM,fontSize:12,fontWeight:700,fontFamily:F.m,cursor:"pointer"}},"REGISTRO")
-      ),
       React.createElement("div",{style:{padding:"24px 32px",display:"flex",flexDirection:"column",gap:14}},
-        mode==="register"&&React.createElement("div",null,
-          React.createElement("label",{style:{display:"block",fontSize:10,fontFamily:F.m,color:DARK_C.txD,letterSpacing:1,marginBottom:6}},"NOMBRE"),
-          React.createElement("input",{value:name,onChange:e=>setName(e.target.value),placeholder:"Tu nombre",style:{width:"100%",boxSizing:"border-box",background:DARK_C.bg,border:"1px solid "+DARK_C.brd,borderRadius:8,padding:"10px 14px",fontSize:13,color:DARK_C.tx,fontFamily:F.b,outline:"none"}})
-        ),
         React.createElement("div",null,
           React.createElement("label",{style:{display:"block",fontSize:10,fontFamily:F.m,color:DARK_C.txD,letterSpacing:1,marginBottom:6}},"EMAIL"),
           React.createElement("input",{type:"email",value:email,onChange:e=>setEmail(e.target.value),placeholder:"email@empresa.com",onKeyDown:e=>e.key==="Enter"&&handleSubmit(),style:{width:"100%",boxSizing:"border-box",background:DARK_C.bg,border:"1px solid "+DARK_C.brd,borderRadius:8,padding:"10px 14px",fontSize:13,color:DARK_C.tx,fontFamily:F.b,outline:"none"}})
@@ -793,7 +781,7 @@ function LoginScreen({onLogin}){
           React.createElement("input",{type:"password",value:password,onChange:e=>setPassword(e.target.value),placeholder:"••••••••",onKeyDown:e=>e.key==="Enter"&&handleSubmit(),style:{width:"100%",boxSizing:"border-box",background:DARK_C.bg,border:"1px solid "+DARK_C.brd,borderRadius:8,padding:"10px 14px",fontSize:13,color:DARK_C.tx,fontFamily:F.b,outline:"none"}})
         ),
         error&&React.createElement("div",{style:{background:"#ef444422",border:"1px solid #ef4444",borderRadius:8,padding:"8px 12px",fontSize:12,color:"#ef4444",fontFamily:F.b}},error),
-        React.createElement("button",{onClick:handleSubmit,disabled:loading,style:{background:loading?DARK_C.brd:DARK_C.acc,border:"none",borderRadius:10,padding:"12px",fontSize:14,fontWeight:700,color:DARK_C.bg,fontFamily:F.m,cursor:loading?"wait":"pointer",marginTop:4}},loading?"Cargando...":mode==="login"?"Entrar":"Crear Cuenta")
+        React.createElement("button",{onClick:handleSubmit,disabled:loading,style:{background:loading?DARK_C.brd:DARK_C.acc,border:"none",borderRadius:10,padding:"12px",fontSize:14,fontWeight:700,color:DARK_C.bg,fontFamily:F.m,cursor:loading?"wait":"pointer",marginTop:4}},loading?"Cargando...":"Entrar")
       )
     )
   );
@@ -1246,8 +1234,6 @@ function App(){
 
   const hr=(e,on)=>{e.currentTarget.style.background=on?C.hover:"transparent"};
 
-  if(!authToken)return React.createElement(LoginScreen,{onLogin:handleLogin});
-
   return React.createElement("div",{style:{fontFamily:F.b,background:C.bg,color:C.tx,height:"100vh",display:"flex",overflow:"hidden"}},
     React.createElement("style",null,`@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');`),
 
@@ -1298,16 +1284,6 @@ function App(){
           n.id==="scanner"&&candidates.length>0&&React.createElement("span",{style:{marginLeft:"auto",minWidth:18,height:18,borderRadius:9,background:C.acc,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:700,color:C.bg,fontFamily:F.m}},candidates.length),
           n.id==="scanner"&&config.claudeKey&&React.createElement("span",{style:{marginLeft:"auto",width:6,height:6,borderRadius:"50%",background:C.ok}})
         ))
-      ),
-      currentUser&&React.createElement("div",{style:{padding:"4px 12px"}},
-        React.createElement("div",{style:{padding:"8px 10px",background:C.bg,borderRadius:8,border:"1px solid "+C.brd,display:"flex",alignItems:"center",gap:8}},
-          React.createElement("div",{style:{width:26,height:26,borderRadius:"50%",background:C.accG,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.acc,fontFamily:F.m,flexShrink:0}},(currentUser.name||currentUser.email||"U").charAt(0).toUpperCase()),
-          React.createElement("div",{style:{flex:1,overflow:"hidden"}},
-            React.createElement("div",{style:{fontSize:10,fontFamily:F.m,color:C.tx,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},currentUser.name||currentUser.email),
-            React.createElement("div",{style:{fontSize:9,color:C.txD,fontFamily:F.m,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},currentUser.email||"")
-          ),
-          React.createElement("button",{onClick:handleLogout,title:"Cerrar sesión",style:{background:"none",border:"none",color:C.txD,cursor:"pointer",fontSize:13,padding:2,flexShrink:0}},"⏻")
-        )
       ),
       React.createElement("div",{style:{padding:"4px 12px"}},
         React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.brd}`}},
