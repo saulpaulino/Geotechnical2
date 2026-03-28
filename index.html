@@ -1025,15 +1025,15 @@ function App(){
   const savedConfig=useRef(null);
   if(!savedConfig.current){
     try{
-      const saved=window.sessionStorage.getItem("geotechnical_apikey");
+      const saved=window.localStorage.getItem("geotechnical_apikey");
       if(saved)savedConfig.current={claudeKey:saved};
     }catch(e){savedConfig.current=null;}
   }
   const[config,setConfig]=useState(savedConfig.current||{claudeKey:""});
 
-  // Save API key to sessionStorage only (never localStorage)
+  // Save API key to localStorage so it persists across sessions
   useEffect(()=>{
-    try{if(config.claudeKey)window.sessionStorage.setItem("geotechnical_apikey",config.claudeKey);else window.sessionStorage.removeItem("geotechnical_apikey");}catch(e){}
+    try{if(config.claudeKey)window.localStorage.setItem("geotechnical_apikey",config.claudeKey);else window.localStorage.removeItem("geotechnical_apikey");}catch(e){}
   },[config]);
 
   // SAVED projects = your real pipeline (persisted in localStorage)
