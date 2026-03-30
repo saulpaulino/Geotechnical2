@@ -172,6 +172,7 @@ function parseJSONArray(text){
 // === MULTI-PHASE SCANNER ===
 function buildScanPrompt(fase, year, mesNombre, excluir, today, now){
   const jsonTemplate=`[{"id":"DO-${String(Date.now()).slice(-4)}","titulo":"nombre","fuente":"donde lo encontraste","tipo":"Carreteras","region":"Norte","provincia":"Santiago","valor_estimado":0,"prob_voladura":80,"fecha_deteccion":"${today}","status":"detectado","descripcion":"descripción","señales":"por qué necesita explosivos","ai_insight":"estrategia comercial","prioridad":"high","contacto":"entidad","url_licitacion":null,"url_fuente":"https://...","codigo_proceso":"","ultima_actualizacion":"${now}"}]`;
+  const fechaFiltro=`IMPORTANTE: Solo resultados de ${mesNombre} en adelante. NO incluir noticias o licitaciones anteriores a este mes.`;
   const fases={
     dgcp:{
       label:"Portal DGCP",
@@ -179,11 +180,12 @@ function buildScanPrompt(fase, year, mesNombre, excluir, today, now){
 
 BÚSQUEDAS:
 1. "licitación obras comprasdominicana.gob.do ${year}"
-2. "comprasdominicana carretera construcción ${year}"
+2. "comprasdominicana carretera construcción ${mesNombre}"
 3. "comprasdominicana infraestructura ${mesNombre}"
 
 TIPOS: carreteras, autopistas, presas, puentes, túneles, movimiento de tierra, puertos.
-AÑO: Solo ${year}. EXCLUIR: ${excluir}.
+${fechaFiltro}
+EXCLUIR: ${excluir}.
 
 INSTRUCCIÓN CRÍTICA: Tu respuesta DEBE ser ÚNICAMENTE un array JSON válido. Sin texto antes ni después. Sin explicaciones. Sin markdown. Así:
 ${jsonTemplate}
@@ -195,13 +197,14 @@ NO respondas con texto explicativo. SOLO el array JSON.`
       prompt:`TAREA: Usa web_search para buscar proyectos del MOPC y noticias de infraestructura en República Dominicana que requieran voladura.
 
 BÚSQUEDAS:
-1. "MOPC licitación obras ${year} República Dominicana"
+1. "MOPC licitación obras ${mesNombre} República Dominicana"
 2. "proyecto infraestructura carretera dominicana ${mesNombre}"
-3. "construcción autopista puente dominicana ${year}"
+3. "construcción autopista puente dominicana ${mesNombre}"
 
 FUENTES: mopc.gob.do, diariolibre.com, listindiario.com, elnuevodiario.com.do
 TIPOS: carreteras, autopistas, puentes de montaña, presas, represas, acueductos en roca.
-AÑO: Solo ${year}. EXCLUIR: ${excluir}.
+${fechaFiltro}
+EXCLUIR: ${excluir}.
 
 INSTRUCCIÓN CRÍTICA: Tu respuesta DEBE ser ÚNICAMENTE un array JSON válido. Sin texto antes ni después. Sin explicaciones. Sin markdown. Así:
 ${jsonTemplate}
@@ -213,13 +216,36 @@ NO respondas con texto explicativo. SOLO el array JSON.`
       prompt:`TAREA: Usa web_search para buscar proyectos de minería, canteras y excavación en República Dominicana que necesiten explosivos.
 
 BÚSQUEDAS:
-1. "minería cantera República Dominicana contrato ${year}"
+1. "minería cantera República Dominicana ${mesNombre}"
 2. "concesión minera explotación dominicana ${mesNombre}"
-3. "proyecto minero excavación roca dominicana"
+3. "proyecto minero excavación roca dominicana ${year}"
 
 FUENTES: dgm.gob.do, noticias minería dominicana, Cámara Minera
 TIPOS: canteras, minería metálica, agregados, explotación de yacimientos, excavaciones masivas.
-AÑO: Solo ${year}. EXCLUIR: ${excluir}.
+${fechaFiltro}
+EXCLUIR: ${excluir}.
+
+INSTRUCCIÓN CRÍTICA: Tu respuesta DEBE ser ÚNICAMENTE un array JSON válido. Sin texto antes ni después. Sin explicaciones. Sin markdown. Así:
+${jsonTemplate}
+Si no encuentras resultados responde exactamente: []
+NO respondas con texto explicativo. SOLO el array JSON.`
+    },
+    noticias:{
+      label:"Noticias y Anuncios",
+      prompt:`TAREA: Usa web_search para buscar NOTICIAS RECIENTES de proyectos de construcción e infraestructura ANUNCIADOS en República Dominicana que puedan necesitar explosivos o voladura.
+
+BÚSQUEDAS:
+1. "proyecto construcción anunciado República Dominicana ${mesNombre}"
+2. "gobierno anuncia obra infraestructura dominicana ${mesNombre}"
+3. "nueva carretera autopista presa anuncio RD ${mesNombre}"
+
+FUENTES PRIORITARIAS: diariolibre.com, listindiario.com, elnuevodiario.com.do, hoy.com.do, acento.com.do, presidencia.gob.do
+BUSCAR: anuncios presidenciales de obras, inauguraciones de proyectos, nuevos contratos firmados, proyectos aprobados, presupuestos asignados a obras.
+TIPOS: carreteras, autopistas, presas, puentes, túneles, puertos, aeropuertos, plantas, urbanizaciones masivas, movimiento de tierra.
+${fechaFiltro}
+EXCLUIR: ${excluir}.
+
+Para cada proyecto anunciado, evalúa si REALMENTE necesitaría explosivos (voladura de roca, excavación masiva, corte de montaña, etc). No incluir proyectos que claramente no necesitan explosivos (ej: pintura de edificios, remodelaciones interiores).
 
 INSTRUCCIÓN CRÍTICA: Tu respuesta DEBE ser ÚNICAMENTE un array JSON válido. Sin texto antes ni después. Sin explicaciones. Sin markdown. Así:
 ${jsonTemplate}
@@ -238,7 +264,7 @@ async function scanDGCP(claudeKey, existingTitles, onPhaseUpdate){
   const year=d.getFullYear();
   const mesNombre=d.toLocaleString("es-DO",{month:"long",year:"numeric"});
 
-  const fases=["dgcp","mopc","mineria"];
+  const fases=["dgcp","mopc","mineria","noticias"];
   const allProjects=[];
   const errors=[];
   const seenTitles=new Set(existingTitles.map(t=>t.toLowerCase()));
@@ -729,7 +755,7 @@ function Scanner({claudeKey, projects, onNewProjects, onScanNotify}){
     }else{if(intervalRef.current)clearInterval(intervalRef.current);}
   },[autoEnabled,claudeKey]);
 
-  const phaseLabels={dgcp:"Portal DGCP",mopc:"MOPC + Infra",mineria:"Minería"};
+  const phaseLabels={dgcp:"Portal DGCP",mopc:"MOPC + Infra",mineria:"Minería",noticias:"Noticias"};
   const phaseIcons={idle:"⏸",scanning:"⟳",done:"✅",error:"❌"};
   const logColors={info:C.txM,scan:C.acc,search:C.md,success:C.ok,error:C.cr,project:C.hi,auto:C.md};
 
@@ -766,8 +792,8 @@ function Scanner({claudeKey, projects, onNewProjects, onScanNotify}){
     ),
 
     // Phase indicators
-    scanning&&React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:12,flexShrink:0}},
-      ["dgcp","mopc","mineria"].map(f=>React.createElement("div",{key:f,style:{background:C.card,border:`1px solid ${phases[f]==="done"?C.ok+"44":phases[f]==="error"?C.cr+"44":C.brd}`,borderRadius:8,padding:"10px 12px",display:"flex",alignItems:"center",gap:8}},
+    scanning&&React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:12,flexShrink:0}},
+      ["dgcp","mopc","mineria","noticias"].map(f=>React.createElement("div",{key:f,style:{background:C.card,border:`1px solid ${phases[f]==="done"?C.ok+"44":phases[f]==="error"?C.cr+"44":C.brd}`,borderRadius:8,padding:"10px 12px",display:"flex",alignItems:"center",gap:8}},
         React.createElement("span",{style:{fontSize:14,animation:phases[f]==="scanning"?"spin 1s linear infinite":"none",display:"inline-flex"}},phaseIcons[phases[f]]),
         React.createElement("div",null,
           React.createElement("div",{style:{fontSize:10,fontWeight:700,fontFamily:F.m,color:phases[f]==="done"?C.ok:phases[f]==="error"?C.cr:C.tx}},phaseLabels[f]),
